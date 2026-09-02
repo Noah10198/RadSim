@@ -1,0 +1,77 @@
+#########################################################
+# rad4space run macro (batch or interactive)
+#########################################################
+# verbosities
+/control/saveHistory
+/run/verbose 1
+/control/verbose 1
+/event/verbose 0
+/tracking/verbose 0
+
+#########################################################
+# Geometry : GDML import (PreInit)
+#########################################################
+/rad4space/gdml/SetGDMLFile axes.gdml
+#/rad4space/gdml/SetGDMLFile simpleCone.gdml
+#/rad4space/gdml/SetGDMLFile mySpacecraft.gdml
+
+#########################################################
+# Physics : replaceable reference physics list (PreInit)
+#########################################################
+/rad4space/physics/SetPL FTFP_BERT
+#/rad4space/physics/SetPL QGSP_BIC
+#/rad4space/physics/SetPL Shielding
+#/rad4space/physics/AddHP true
+#/rad4space/physics/AddRDM true
+/rad4space/physics/SetGlobalCut 0.7 mm
+
+#########################################################
+# Initialize run manager.
+#   Must come before /gps/*, /score/* and /analysis/h1/*
+#   because those messengers are registered when the
+#   user actions / scoring manager are instantiated.
+#########################################################
+/run/initialize
+
+#########################################################
+# Primary particles : General Particle Source (like exgps)
+#########################################################
+/gps/particle proton
+/gps/energy 100 MeV
+/gps/pos/type Point
+/gps/pos/centre 0. 0. -30. cm
+/gps/direction 0. 0. 1.
+#/control/execute gps_point.mac
+
+#########################################################
+# Native command-based scoring (like RE03)
+#   probe + volume flux primitive scorers
+#########################################################
+/score/create/probe Probes 5. cm
+/score/probe/locate 0. 0. 0. cm
+/score/quantity/volumeFlux volFlux
+/score/quantity/volumeFlux protonFlux
+/score/filter/particle protonFilter proton
+/score/close
+/score/list
+
+#########################################################
+# Native 1-D histogram filling (Book 4.9.8)
+#   /analysis/h1/create <name> <title> <nbins> <xmin> <xmax> <unit> <fcn> <scheme>
+#########################################################
+/analysis/h1/create volFlux Probes_volFlux 100 0.01 2000. MeV ! log
+/analysis/h1/create protonFlux Probes_protonFlux 100 0.01 2000. MeV ! log
+/score/fill1D 0 Probes volFlux
+/score/fill1D 1 Probes protonFlux
+
+#########################################################
+# Run
+#########################################################
+/run/beamOn 1000
+
+#########################################################
+# Dump mesh/probe scores to CSV files
+#########################################################
+/score/dumpAllQuantitiesToFile Probes Probes.csv
+
+exit

@@ -1,0 +1,58 @@
+#
+# rad4space visualization macro (interactive mode)
+#
+# Double-click rad4space.exe (or run it without arguments):
+#   - axes.gdml is imported automatically
+#   - the GDML structure is rendered in a Qt window (OGLIQt driver)
+#   - 10 protons are fired so trajectories are visible
+#
+# In interactive mode run.mac is NOT executed, so the geometry,
+# physics and /run/initialize are set up here.
+#
+
+/control/verbose 2
+
+# --- geometry & physics (PreInit commands) ---
+/rad4space/gdml/SetGDMLFile axes.gdml
+/rad4space/physics/SetPL FTFP_BERT
+/rad4space/physics/SetGlobalCut 0.7 mm
+/run/initialize
+
+# --- Qt embedded OpenGL viewer ---
+/vis/open OGLIQt 900x700-0+0
+
+# Disable auto refresh and quieten vis messages while the scene is built:
+/vis/viewer/set/autoRefresh false
+/vis/verbose errors
+
+# --- draw the GDML geometry ---
+/vis/drawVolume
+
+# --- viewpoint / axes / zoom ---
+/vis/viewer/set/viewpointThetaPhi 60. -92.
+/vis/viewer/zoom 1.3
+/vis/scene/add/axes 0 0 0 0.2 m
+
+# --- smooth trajectories, coloured by charge ---
+/vis/scene/add/trajectories smooth
+/vis/modeling/trajectories/create/drawByCharge
+/vis/modeling/trajectories/drawByCharge-0/default/setDrawStepPts true
+/vis/modeling/trajectories/drawByCharge-0/default/setStepPtsSize 2
+/vis/scene/endOfEventAction accumulate
+
+# --- re-establish auto refreshing and verbosity ---
+/vis/viewer/set/autoRefresh true
+/vis/verbose warnings
+
+# --- fire a few protons so the trajectories are visible ---
+# (remove these lines if you only want to see the structure)
+/gps/particle proton
+/gps/energy 100 MeV
+/gps/position 0. 0. -30. cm
+/gps/direction 0. 0. 1.
+# default is planar (direction used verbatim).
+# NEVER add /gps/ang/type iso here: iso's polar axis is -z,
+# so an "iso + maxtheta 5 deg" cone points at -z and flies
+# out of the world without hitting anything.
+/gps/ang/type planar
+/run/beamOn 10

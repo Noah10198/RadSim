@@ -1,0 +1,24 @@
+# MT vs serial check (MT run) : realWorldLogVol scoring
+/run/verbose 0
+/control/verbose 0
+/rad4space/gdml/SetGDMLFile axes.gdml
+/rad4space/physics/SetPL FTFP_BERT
+/rad4space/physics/SetGlobalCut 0.7 mm
+/run/initialize
+/gps/particle proton
+/gps/ene/type Lin
+/gps/ene/min 1. MeV
+/gps/ene/max 10. MeV
+/gps/ene/gradient 0.
+/gps/ene/intercept 1.
+/gps/pos/type Point
+/gps/pos/centre 0. 0. -30. cm
+/gps/direction 0. 0. 1.
+/gps/ang/type planar
+/score/create/realWorldLogVol vOrigin
+/score/quantity/energyDeposit eDep MeV
+/score/quantity/volumeFlux volFlux
+/score/close
+/run/beamOn 5000
+/score/dumpAllQuantitiesToFile vOrigin mtcmp_mt.csv
+exit

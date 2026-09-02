@@ -1,0 +1,52 @@
+#########################################################
+# realworld 分析模板：对逻辑体（realWorldLogVol）评分
+# 用途：用户在 GUI 勾选逻辑体 + quantity + 能谱 + filter
+#
+# GUI 参数映射：
+#   {GDML_FILE}   → /rad4space/gdml/SetGDMLFile
+#   {PHYS_LIST}   → /rad4space/physics/SetPL (FTFP_BERT/QGSP_BIC/Shielding)
+#   {CUT_MM}      → /rad4space/physics/SetGlobalCut
+#   {PARTICLE}    → /gps/particle
+#   {ENERGY_SPEC} → 单能 /gps/energy 或 Lin 或 User hist（见 README §6）
+#   {LV_NAME}     → /score/create/realWorldLogVol  (一个逻辑体一个 cell)
+#   {QUANTITIES}  → /score/quantity/<primitive> 行
+#   {FILTERS}     → /score/filter/* 行（必须紧跟其 target quantity 之后，见 README §5）
+#   {H1_LIST}     → /analysis/h1/create 行 + /score/fill1D 行
+#   {N_EVENTS}    → /run/beamOn
+#   {OUT_CSV}     → /score/dumpAllQuantitiesToFile
+#########################################################
+/run/verbose 1
+/control/verbose 1
+
+# --- 几何 & 物理 (PreInit) ---
+/rad4space/gdml/SetGDMLFile {GDML_FILE}
+/rad4space/physics/SetPL {PHYS_LIST}
+/rad4space/physics/SetGlobalCut {CUT_MM} mm
+/run/initialize
+
+# --- 粒子源 ---
+/gps/particle {PARTICLE}
+/gps/energy {ENERGY_MEV} MeV
+/gps/pos/type Point
+/gps/pos/centre {PX} {PY} {PZ} cm
+/gps/direction {DX} {DY} {DZ}
+
+# --- realworld 评分（逻辑体名 = 网格名）---
+/score/create/realWorldLogVol {LV_NAME}
+/score/quantity/energyDeposit eDep MeV
+# /score/filter/particle gammaFilter gamma        # 要过滤 eDep：filter 紧跟其后（此处）
+/score/quantity/volumeFlux volFlux
+# /score/filter/particle protonFilter proton      # 要过滤 volFlux：filter 紧跟其后（此处）
+/score/close
+/score/list
+
+# --- 能谱直方图（realworld 支持 fill1D）---
+/analysis/h1/create eDep {LV_NAME}_eDep 100 0. 10. MeV
+/analysis/h1/create volFlux {LV_NAME}_volFlux 100 0.01 2000. MeV ! log
+/score/fill1D 0 {LV_NAME} eDep
+/score/fill1D 1 {LV_NAME} volFlux
+
+# --- 运行 & 导出 ---
+/run/beamOn {N_EVENTS}
+/score/dumpAllQuantitiesToFile {LV_NAME} {OUT_CSV}
+exit

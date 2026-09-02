@@ -1,0 +1,64 @@
+#########################################################
+# probe 分析模板：立方体探针评分
+# 用途：用户在 GUI 设置探针尺寸/位置 + quantity + 能谱 + filter
+#       （可添加多个探针 → 重复 /score/create/probe 块）
+#
+# GUI 参数映射：
+#   {GDML_FILE}   → /rad4space/gdml/SetGDMLFile
+#   {PHYS_LIST}   → /rad4space/physics/SetPL
+#   {CUT_MM}      → /rad4space/physics/SetGlobalCut
+#   {PARTICLE}    → /gps/particle
+#   {ENERGY_SPEC} → 单能 /gps/energy 或 Lin 或 User hist
+#   {PROBE_NAME}  → /score/create/probe 名称（如 Probes）
+#   {HALF_SIZE}   → /score/create/probe ... {HALF} cm   (半边长)
+#   {LOCATE}      → /score/probe/locate x y z cm        (探针中心)
+#   {QUANTITIES}  → /score/quantity/<primitive> 行
+#   {FILTERS}     → /score/filter/* 行（必须紧跟其 target quantity 之后，见 README §5）
+#   {H1_LIST}     → /analysis/h1/create 行 + /score/fill1D 行
+#   {N_EVENTS}    → /run/beamOn
+#   {OUT_CSV}     → /score/dumpAllQuantitiesToFile
+#########################################################
+/run/verbose 1
+/control/verbose 1
+
+# --- 几何 & 物理 (PreInit) ---
+/rad4space/gdml/SetGDMLFile {GDML_FILE}
+/rad4space/physics/SetPL {PHYS_LIST}
+/rad4space/physics/SetGlobalCut {CUT_MM} mm
+/run/initialize
+
+# --- 粒子源 ---
+/gps/particle {PARTICLE}
+/gps/energy {ENERGY_MEV} MeV
+/gps/pos/type Point
+/gps/pos/centre {PX} {PY} {PZ} cm
+/gps/direction {DX} {DY} {DZ}
+
+# --- 探针 1 ---
+/score/create/probe {PROBE_NAME} {HALF_SIZE} cm
+/score/probe/locate {LX} {LY} {LZ} cm
+/score/quantity/volumeFlux volFlux
+# /score/filter/particle protonFilter proton      # filter 紧跟 target → 绑定 volFlux
+
+/score/quantity/energyDeposit eDep MeV
+# /score/filter/particle gammaFilter gamma        # 如需过滤 eDep：把 filter 紧跟在其后
+/score/close
+
+# --- 多探针示例：复制上面块，换名称/位置 ---
+# /score/create/probe Probe2 2. cm
+# /score/probe/locate 5. 0. 0. cm
+# /score/quantity/volumeFlux volFlux
+# /score/close
+
+/score/list
+
+# --- 能谱直方图（probe 支持 fill1D）---
+/analysis/h1/create volFlux {PROBE_NAME}_volFlux 100 0.01 2000. MeV ! log
+/analysis/h1/create eDep   {PROBE_NAME}_eDep   100 0.001 1000. MeV ! log
+/score/fill1D 0 {PROBE_NAME} volFlux
+/score/fill1D 1 {PROBE_NAME} eDep
+
+# --- 运行 & 导出 ---
+/run/beamOn {N_EVENTS}
+/score/dumpAllQuantitiesToFile {PROBE_NAME} {OUT_CSV}
+exit

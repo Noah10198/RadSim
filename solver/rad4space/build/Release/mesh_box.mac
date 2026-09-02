@@ -1,0 +1,39 @@
+#########################################################
+# mesh_box.mac : boxMesh scoring test
+#
+#   Cartesian box grid: half-size 15 cm, 10x10x10 cells
+#   energyDeposit primitive scorer
+#   (fill1D does NOT apply to boxMesh; use dumpQuantityToFile)
+#
+# Usage:
+#   rad4space.exe mesh_box.mac [nThreads]
+#########################################################
+/run/verbose 1
+/control/verbose 1
+
+/rad4space/gdml/SetGDMLFile axes.gdml
+/rad4space/physics/SetPL FTFP_BERT
+/rad4space/physics/SetGlobalCut 0.7 mm
+/run/initialize
+
+# --- primary source : 100 MeV protons along +z ---
+/gps/particle proton
+/gps/energy 100 MeV
+/gps/pos/type Point
+/gps/pos/centre 0. 0. -30. cm
+/gps/direction 0. 0. 1.
+
+# --- box mesh (half sizes Dx Dy Dz, centred on origin) ---
+/score/create/boxMesh Box
+/score/mesh/boxSize 15. 15. 15. cm
+/score/mesh/nBin 10 10 10
+/score/quantity/energyDeposit eDep MeV
+/score/close
+/score/list
+
+/run/beamOn 100
+
+# --- dump the 3-D grid ---
+/score/dumpQuantityToFile Box eDep mesh_box_eDep.csv
+
+exit

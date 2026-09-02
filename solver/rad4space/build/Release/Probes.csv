@@ -1,0 +1,7 @@
+# mesh name: Probes
+# primitive scorer name: protonFlux
+# i, i, i, total(value) [NoUnit], total(val^2), entry
+0,0,0,1000,1000,1000
+# primitive scorer name: volFlux
+# i, i, i, total(value) [NoUnit], total(val^2), entry
+0,0,0,1000,1000,1000

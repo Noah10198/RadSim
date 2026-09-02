@@ -1,0 +1,12 @@
+/rad4space/gdml/SetGDMLFile axes.gdml
+/rad4space/physics/SetPL FTFP_BERT
+/rad4space/physics/SetGlobalCut 0.7 mm
+/run/initialize
+/gps/particle proton
+/gps/ene/mono 5. MeV
+/gps/pos/type Point
+/gps/pos/centre 0. 0. -30. cm
+/gps/direction 0. 0. 1.
+/gps/verbose 1
+/run/beamOn 5
+exit

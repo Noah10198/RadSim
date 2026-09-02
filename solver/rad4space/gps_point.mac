@@ -1,0 +1,23 @@
+#######################################################
+#
+# Sample macro to set the General Particle Source
+# shooting 100 MeV protons along +z from (0,0,-30 cm)
+#
+# WARNING: /gps/ang/type iso does NOT point along
+# /gps/direction.  G4SPSGenerateIsotropicFlux builds
+# (px,py,pz) = (-sinT cosP, -sinT sinP, -cosT), i.e. its
+# polar axis is -z.  So "iso + maxtheta 5 deg" is a 5-deg
+# cone pointing at -z: particles leave the world without
+# hitting the origin.  Remove the iso block below or use
+# /gps/ang/type planar (+ /gps/direction) for a +z beam.
+#
+#######################################################
+/gps/particle proton
+/gps/energy 100.0 MeV
+/gps/pos/type Point
+/gps/pos/centre 0.0 0.0 -30.0 cm
+/gps/direction 0.0 0.0 1.0
+/gps/number 1
+/gps/ang/type iso
+/gps/ang/maxtheta 5.0 deg
+/gps/source/list

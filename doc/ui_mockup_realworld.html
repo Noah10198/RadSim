@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="UTF-8"><title>3dRad · RealWorld 分析弹窗原型</title><style>
+:root{--bg:#16171d;--p:#1f212b;--p2:#262936;--bd:#33364a;--ac:#4f8cff;--tx:#c9ccd6;--dm:#8a8d9a;--ok:#3fbf6f;--wr:#f0a94e;--red:#e05555}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#101116;color:var(--tx);font:13px/1.5 "Segoe UI",system-ui,sans-serif;padding:26px}
+h1{color:#fff;font-size:19px}.sub{color:var(--dm);margin:4px 0 20px}
+.tag{display:inline-block;font-size:10px;background:#33364a;color:var(--dm);padding:1px 8px;border-radius:8px;margin-left:8px;vertical-align:2px}
+
+/* ---------- 顶部：触发说明 ---------- */
+.flow{display:flex;gap:10px;align-items:center;margin-bottom:24px;font-size:12px;color:var(--dm);flex-wrap:wrap}
+.flow .st{background:var(--p);border:1px solid var(--bd);border-radius:8px;padding:6px 12px;color:var(--tx)}
+.flow .st b{color:var(--ac)}
+.flow .ar{color:#555}
+.flow .st.dbl{outline:1px dashed var(--ac);outline-offset:-1px}
+
+/* ---------- 模态遮罩 + 弹窗 ---------- */
+.mask{position:fixed;inset:0;background:rgba(5,6,10,.62);display:flex;align-items:center;justify-content:center;z-index:10}
+.rw{width:1020px;max-width:96vw;background:var(--p);border:1px solid var(--bd);border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);overflow:hidden}
+.rw-head{background:var(--p2);padding:10px 16px;display:flex;align-items:center;border-bottom:1px solid var(--bd)}
+.rw-head .t{color:#fff;font-weight:600;font-size:13.5px}
+.rw-head .m{color:var(--dm);font-size:11px;margin-left:10px}
+.rw-head .x{margin-left:auto;color:var(--dm);cursor:pointer;font-size:15px;padding:0 6px}
+.rw-head .x:hover{color:#fff}
+
+/* ---------- 三栏 ---------- */
+.cols{display:flex;min-height:430px}
+.col{border-right:1px solid var(--bd)}
+.col:last-child{border-right:none}
+.col-h{background:#1b1e29;padding:8px 12px;font-size:12px;color:#fff;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px}
+.col-h .cnt{margin-left:auto;font-size:10.5px;color:var(--dm)}
+.col-h .cnt b{color:var(--ac)}
+
+/* ① 逻辑体列表（GDML 层级树） */
+.col-lv{width:270px;flex-shrink:0;display:flex;flex-direction:column}
+.lv-tree{flex:1;padding:8px;overflow:auto}
+.tn{display:flex;align-items:center;gap:7px;padding:5px 7px;border-radius:6px;cursor:pointer;font-size:12.5px;white-space:nowrap;border-left:3px solid transparent}
+.tn:hover{background:#2a2d3d}
+.tn.sel{background:#26334f;border-left-color:var(--ac)}
+.tn .tw{width:18px;color:#6a6e7f;font-size:10px;flex-shrink:0;text-align:center}
+.tn .ck{width:15px;height:15px;border:1px solid var(--bd);border-radius:3px;background:#16181f;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff}
+.tn .ck.cfg{background:var(--ac);border-color:var(--ac)}
+.tn .nm{font-family:Consolas,monospace;color:#e6e8f0}
+.tn.sel .nm{color:#cfe0ff}
+.tn .mt{font-size:10px;padding:0 6px;border-radius:6px;margin-left:auto;flex-shrink:0}
+.tn .cnt{font-size:10px;color:var(--dm);flex-shrink:0}
+.mt.al{background:#17324a;color:#7ab7f0}.mt.air{background:#2c2f3d;color:#9aa0b0}
+.tn.world{opacity:.5;cursor:default}
+.tch{margin-left:16px;border-left:1px solid #2a2d3d;padding-left:7px}
+.lv-foot{border-top:1px solid var(--bd);padding:7px 10px;font-size:10.5px;color:var(--dm)}
+.lv-foot b{color:var(--ac)}
+
+/* ② quantity + filter */
+.col-q{width:390px;flex-shrink:0;display:flex;flex-direction:column}
+.q{flex:1;padding:10px;overflow:auto}
+.q-head{display:flex;font-size:10.5px;color:var(--dm);padding:2px 8px 6px;gap:6px}
+.q-head .sp2{width:96px}.q-head .sp3{width:110px}.q-head .sp4{width:58px}
+.q-row{border:1px solid var(--bd);border-radius:8px;background:#191b24;margin-bottom:8px}
+.q-row .ln{display:flex;align-items:center;gap:6px;padding:7px 9px}
+.q-row .in{background:#0e0f15;border:1px solid var(--bd);border-radius:5px;padding:3px 7px;color:#fff;font:11.5px Consolas,monospace}
+.q-row .in.nm{width:84px}
+.q-row .in.sel{width:110px;appearance:none;color:var(--tx)}
+.unit-lock{width:52px;text-align:center;color:var(--ac);font-size:11px;background:#101218;border:1px solid var(--bd);border-radius:5px;padding:3px 7px;font:11.5px Consolas,monospace;user-select:none;flex-shrink:0}
+.q-row .fb{margin-left:auto;font-size:11px;color:var(--dm);border:1px solid var(--bd);border-radius:5px;padding:2px 9px;cursor:pointer;white-space:nowrap}
+.q-row .fb.on{color:#ffd580;border-color:#5a5d75;background:#241f12}
+.q-row .fb.hot{color:var(--ac);border-color:#33507f}
+/* filter 行内展开 */
+.q-f{display:none;border-top:1px dashed var(--bd);padding:7px 9px;background:#101218;font-size:11.5px}
+.q-row.open .q-f{display:block}
+.q-f .k{color:var(--dm);font-size:10.5px;margin-bottom:4px}
+.fsel{display:flex;gap:6px;align-items:center}
+.fsel .in{flex:1}
+.q-add{padding:6px 10px;color:var(--ac);cursor:pointer;font-size:12px;text-align:center}
+.q-add:hover{background:#26334f;border-radius:6px}
+.q-note{font-size:10.5px;color:var(--dm);padding:2px 8px}
+
+/* ③ histogram */
+.col-h1{flex:1;display:flex;flex-direction:column;min-width:300px}
+.h1{flex:1;padding:10px;overflow:auto}
+.h1-row{border:1px solid var(--bd);border-radius:8px;background:#191b24;padding:8px 10px;margin-bottom:8px}
+.h1-row .l1{display:flex;align-items:center;gap:6px;margin-bottom:7px}
+.h1-row .in{background:#0e0f15;border:1px solid var(--bd);border-radius:5px;padding:3px 7px;color:#fff;font:11.5px Consolas,monospace}
+.h1-row .in.q{width:70px;text-align:center}
+.h1-row .in.bin{width:52px;text-align:center}
+.h1-row .in.rng{width:118px;text-align:center}
+.h1-row .in.unit{width:48px;text-align:center}
+.h1-row .lbl{font-size:10.5px;color:var(--dm)}
+.h1-row .r2{display:flex;align-items:center;gap:6px}
+.log{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dm);margin-left:auto}
+.log .ck{width:14px;height:14px;border:1px solid var(--bd);border-radius:3px;background:#0e0f15}
+.log.on .ck{background:var(--ac);border-color:var(--ac)}
+.h1-add{padding:6px 10px;color:var(--ac);cursor:pointer;font-size:12px;text-align:center}
+.h1-add:hover{background:#26334f;border-radius:6px}
+.h1-note{font-size:10.5px;color:var(--dm);padding:2px 8px}
+
+/* ---------- 底部按钮 ---------- */
+.rw-foot{background:var(--p2);border-top:1px solid var(--bd);padding:11px 16px;display:flex;align-items:center;gap:10px}
+.rw-foot .info{font-size:11px;color:var(--dm);display:flex;gap:14px}
+.rw-foot .info b{color:var(--tx)}
+.rw-foot .sp{flex:1}
+.btn{padding:7px 20px;border-radius:7px;border:1px solid var(--bd);background:#292c3a;color:#fff;font-size:12.5px;cursor:pointer}
+.btn:hover{border-color:#4a4e6a}
+.btn.p{background:var(--ac);border-color:var(--ac);font-weight:600}
+.btn.p:hover{background:#5f9aff}
+.q-row .del{color:#555;cursor:pointer;font-size:13px;padding:0 3px}
+.q-row .del:hover{color:var(--red)}
+.h1-row .del{color:#555;cursor:pointer;font-size:13px;margin-left:2px}
+.h1-row .del:hover{color:var(--red)}
+.fsel .fdel{color:var(--red);cursor:pointer;font-size:11px;white-space:nowrap}
+
+/* 空态 */
+.empty{display:none;border:1px dashed #33364a;border-radius:8px;padding:26px 14px;text-align:center;color:var(--dm);font-size:12px;line-height:1.9}
+.empty b{color:var(--tx)}
+
+/* 主界面（弹窗背后的母体） */
+.main-view{max-width:1020px;background:var(--p);border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:20px}
+.mv-bar{background:var(--p2);padding:9px 14px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--bd);font-size:12px}
+.mv-bar .mv-t{color:#fff;font-weight:600;font-size:13px}
+.mv-bar .mv-p{color:var(--dm)}.mv-bar .mv-p b{color:var(--tx)}
+.mv-body{padding:18px 16px;color:var(--dm);font-size:12.5px;line-height:1.9}
+.mv-body .run-tip{color:var(--wr)}
+
+/* toast */
+.toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(12px);background:#17241b;border:1px solid var(--ok);color:#cff0d8;padding:9px 20px;border-radius:8px;font-size:12.5px;opacity:0;pointer-events:none;transition:.25s;z-index:99}
+.toast.show{opacity:1;transform:translateX(-50%)}
+
+/* ---------- 页脚说明 ---------- */
+.legend{max-width:1020px;margin:22px auto 0;font-size:12px;color:var(--dm);line-height:1.9}
+.legend b{color:var(--tx)}
+.legend .hl{color:var(--ac)}
+</style></head><body>
+
+<h1>RealWorld 分析弹窗原型 <span class="tag">axes.gdml 示例</span></h1>
+<div class="sub">模态弹窗 · 三栏布局：逻辑体勾选 → Quantity + Filter → 能谱设置</div>
+
+<!-- 触发流程示意 -->
+<div class="flow">
+  <span class="st">项目树<br><b>Runs</b> → Analysis</span>
+  <span class="ar">→</span>
+  <span class="st dbl">双击 <b>RealWorld 分析</b><br><span style="color:var(--dm);font-size:11px">（模态，不确认回不到主界面）</span></span>
+  <span class="ar">→</span>
+  <span class="st">弹窗内逐逻辑体配置<br><span style="color:var(--dm);font-size:11px">确认后回到主界面</span></span>
+  <span class="ar">→</span>
+  <span class="st">主界面点 <b style="color:var(--ok)">▶ 运行</b><br><span style="color:var(--dm);font-size:11px">弹窗只负责配置，不触发运行</span></span>
+</div>
+
+<!-- 主界面（弹窗背后的母体，模拟） -->
+<div class="main-view" id="mv" style="display:none">
+  <div class="mv-bar">
+    <span class="mv-t">3dRad</span>
+    <span class="mv-p">项目树 / <b>RunSet 01</b> / RealWorld 分析</span>
+    <span style="flex:1"></span>
+    <span class="btn p" onclick="toast('▶ 开始运行模拟（此处对接 RunManager）')">▶ 运行</span>
+  </div>
+  <div class="mv-body" id="mvBody"></div>
+</div>
+
+<!-- 模态弹窗 -->
+<div class="mask">
+  <div class="rw">
+
+    <div class="rw-head">
+      <span class="t">RealWorld 分析设置</span>
+      <span class="m">axes.gdml · 逻辑体评分（一个逻辑体 = 一个 cell）</span>
+      <span class="x">✕</span>
+    </div>
+
+    <div class="cols">
+
+      <!-- ① 逻辑体列表 -->
+      <div class="col col-lv">
+        <div class="col-h">逻辑体（GDML 层级）<span class="cnt">点选查看配置</span></div>
+        <div class="lv-tree" id="lvTree"></div>
+        <div class="lv-foot"><b>☑</b> = 已配置，由右侧设置自动联动（无需手动勾选）</div>
+      </div>
+
+      <!-- ② Quantity + Filter -->
+      <div class="col col-q">
+        <div class="col-h">Quantity 设置<span class="cnt" id="qTitle"></span></div>
+        <div class="q">
+          <div class="q-head"><span class="sp2">名称</span><span class="sp3">类型</span><span class="sp4">单位（锁定）</span><span style="flex:1">filter</span></div>
+          <div id="qRows"></div>
+          <div class="empty" id="qEmpty"></div>
+          <div class="q-add" onclick="addQ()">+ 添加 quantity</div>
+          <div class="q-note">15 种 realWorld 可用类型全开放（17 − flatSurface* 仅 box）；仅能量/通量/径迹/步数类（10 种）可挂能谱</div>
+        </div>
+      </div>
+
+      <!-- ③ histogram -->
+      <div class="col col-h1">
+        <div class="col-h">能谱直方图（/score/fill1D）<span class="cnt" id="hTitle"></span></div>
+        <div class="h1">
+          <div id="hRows"></div>
+          <div class="empty" id="hEmpty"></div>
+          <div class="h1-add" onclick="addH()">+ 添加直方图</div>
+          <div class="h1-note">x 轴单位由关联量锁定：eDep→MeV · dose→Gy · 通量类→MeV（入射动能） · nOfStep→mm（步长）</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="rw-foot">
+      <span class="info" id="footInfo"></span>
+      <span class="sp"></span>
+      <span class="btn" onclick="closeM(false)">取消</span>
+      <span class="btn p" onclick="closeM(true)">确认</span>
+    </div>
+
+  </div>
+</div>
+
+<div class="legend">
+  <b>设计要点（联动版）：</b><br>
+  1. <b class="hl">点选即刷新</b>：点击左侧任意逻辑体 → 右侧 quantity / 直方图两栏<b>刷新为该逻辑体的专属配置</b>；未配置时显示空态引导。<br>
+  2. <b class="hl">配置持久化</b>：每逻辑体独立存储——切换走再点回来，配置不丢失；删空该逻辑体全部 quantity 和直方图，勾选自动消失。<br>
+  3. <b class="hl">勾选联动</b>：左侧 ☑ 不是手动勾选，而是<b>由配置驱动</b>（有任一 quantity 或直方图即打勾），无需"全选/全不选"。<br>
+  4. <b class="hl">确认 ≠ 运行</b>：右下角「确认」只保存配置并关闭弹窗；「▶ 运行」在主界面工具栏。弹窗全程不触发模拟。<br>
+  5. <b class="hl">filter 交互</b>：点 quantity 行右侧 filter 标签（"+ filter" / "✓ gamma"）→ 该行下方<b>行内展开</b>编辑区；不是再弹子窗。<br>
+  6. <b class="hl">单位锁定</b>：quantity 单位（默认单位列）与直方图 x 轴单位（x 轴列）均<b>只读、由类型一一对应</b>，不可修改；关联量切换时 x 轴单位自动跟换。<br>
+  7. 生成规则：每个已配置逻辑体生成一个 <code>/score/create/realWorldLogVol &lt;LV&gt;</code> mesh，各带自己的 quantity + <code>/analysis/h1/create</code> + <code>/score/fill1D</code>。
+</div>
+
+<div class="toast" id="toast"></div>
+<script>
+const LVS=['vXBox','vYBox','vZBox','vOrigin','vArrow'];
+/* realWorld 可用全部 15 种（17 种 − flatSurface* 仅 boxMesh；GUI 首版全开放） */
+const QTYPES=['energyDeposit','doseDeposit','volumeFlux','nOfStep','nOfTrack','nOfSecondary','cellFlux','passageCellFlux','passageCellCurrent','passageTrackLength','trackLength','cellCharge','nOfCollision','nOfTerminatedTrack','population'];
+const FTYPES=['particle','kineticEnergy','particleWithEnergy','charged','neutral'];
+const PARTICLES=['gamma','e-','e+','proton','neutron','alpha'];
+/* 单位完全锁定，由类型一一对应（BFAD Table 8）：quantity 看"默认单位"列，直方图看"x 轴"列 */
+const QUNIT={energyDeposit:'MeV',doseDeposit:'Gy',volumeFlux:'—',nOfStep:'—',nOfTrack:'—',nOfSecondary:'—',cellFlux:'cm⁻²',passageCellFlux:'cm⁻²',passageCellCurrent:'—',passageTrackLength:'mm',trackLength:'mm',cellCharge:'e⁺',nOfCollision:'—',nOfTerminatedTrack:'—',population:'—'};
+/* 支持 fill1D 的类型（Table 8 中 x 轴非 n/a）；不在表内 = 不支持能谱 */
+const HUNIT={energyDeposit:'MeV',doseDeposit:'Gy',volumeFlux:'MeV',nOfStep:'mm',nOfTrack:'MeV',nOfSecondary:'MeV',cellFlux:'MeV',passageCellFlux:'MeV',passageCellCurrent:'MeV',passageTrackLength:'mm'};
+const qTypeOf=qn=>{const t=cur().qs.find(x=>x.name===qn);return t?t.type:''};
+const histOpts=cu=>{
+  const c=cur();
+  const names=c.qs.filter(q=>HUNIT[q.type]).map(q=>q.name);
+  let s='';
+  if(cu&&names.indexOf(cu)<0)s+='<option selected>'+cu+'（不可用）</option>';
+  return s+names.map(n=>'<option'+(n===cu?' selected':'')+'>'+n+'</option>').join('');
+};
+const state={
+  active:'vXBox',
+  cfg:{
+    vXBox:{qs:[{name:'q1',type:'energyDeposit',f:{t:'particle',p:'gamma'}}],
+           hs:[{q:'q1',bins:100,rng:'0.001 – 1000.',log:false}]},
+    vYBox:{qs:[],hs:[]},
+    vZBox:{qs:[],hs:[]},
+    vOrigin:{qs:[{name:'q1',type:'volumeFlux',f:null}],
+             hs:[{q:'q1',bins:100,rng:'0.01 – 2000.',log:true}]},
+    vArrow:{qs:[],hs:[]}
+  }
+};
+const $=id=>document.getElementById(id);
+const cur=()=>state.cfg[state.active];
+const configured=lv=>{const c=state.cfg[lv];return c.qs.length>0||c.hs.length>0};
+
+function renderTree(){
+  const t=$('lvTree');t.innerHTML='';
+  const w=document.createElement('div');w.className='tn world';
+  w.innerHTML='<span class="tw">▼</span><span class="ck"></span><span class="nm">TOP</span><span class="mt air">AIR</span><span class="cnt">世界</span>';
+  t.appendChild(w);
+  const ch=document.createElement('div');ch.className='tch';
+  LVS.forEach((lv,i)=>{
+    const n=document.createElement('div');
+    n.className='tn'+(state.active===lv?' sel':'');
+    n.innerHTML='<span class="tw">'+(i===LVS.length-1?'└─':'├─')+'</span>'+
+      '<span class="ck'+(configured(lv)?' cfg':'')+'">'+(configured(lv)?'✓':'')+'</span>'+
+      '<span class="nm">'+lv+'</span><span class="mt al">ALU</span>'+
+      (lv==='vArrow'?'<span class="cnt">×3</span>':'');
+    n.onclick=()=>setActive(lv);
+    ch.appendChild(n);
+  });
+  t.appendChild(ch);
+}
+function setActive(lv){state.active=lv;renderTree();renderRight();}
+
+function renderRight(){
+  const c=cur();
+  $('qTitle').innerHTML='<b>'+state.active+'</b>';
+  $('hTitle').innerHTML='<b>'+state.active+'</b>';
+  const qr=$('qRows');qr.innerHTML='';
+  $('qEmpty').style.display=c.qs.length?'none':'block';
+  $('qEmpty').innerHTML='<b>'+state.active+'</b> 尚未配置 quantity<br>点击下方「+ 添加 quantity」开始';
+  c.qs.forEach((q,i)=>{
+    const row=document.createElement('div');row.className='q-row'+(q.fOpen?' open':'');
+    row.innerHTML='<div class="ln">'+
+      '<input class="in nm" value="'+q.name+'" oninput="qN('+i+',this.value)">'+
+      '<select class="in sel" onchange="qT('+i+',this.value)">'+QTYPES.map(t=>'<option'+(t===q.type?' selected':'')+'>'+t+'</option>').join('')+'</select>'+
+      '<span class="unit-lock" title="由类型锁定，不可修改">'+QUNIT[q.type]+'</span>'+
+      '<span class="fb '+(q.f?'on':'hot')+'" onclick="togF('+i+')">'+(q.f?('✓ '+q.f.p):'+ filter')+'</span>'+
+      '<span class="del" onclick="delQ('+i+')">✕</span></div>'+
+      '<div class="q-f"><div class="k">filter 类型（紧跟此 quantity 之后写入 mac）</div><div class="fsel">'+
+      '<select class="in" onchange="fT('+i+',this.value)">'+FTYPES.map(t=>'<option'+(q.f&&q.f.t===t?' selected':'')+'>'+t+'</option>').join('')+'</select>'+
+      '<select class="in" onchange="fP('+i+',this.value)">'+PARTICLES.map(p=>'<option'+(q.f&&q.f.p===p?' selected':'')+'>'+p+'</option>').join('')+'</select>'+
+      (q.f?'<span class="fdel" onclick="delF('+i+')">✕ 删除 filter</span>':'')+
+      '</div></div>';
+    qr.appendChild(row);
+  });
+  const hr=$('hRows');hr.innerHTML='';
+  $('hEmpty').style.display=c.hs.length?'none':'block';
+  $('hEmpty').innerHTML='<b>'+state.active+'</b> 尚未配置能谱直方图<br>添加后左侧将自动打勾';
+  c.hs.forEach((h,i)=>{
+    const row=document.createElement('div');row.className='h1-row';
+    row.innerHTML='<div class="l1"><span class="lbl">关联量</span>'+
+      '<select class="in q" onchange="hQ('+i+',this.value)">'+(histOpts(h.q)||'<option disabled selected>（无可用量）</option>')+'</select>'+
+      '<span class="lbl">bins</span><input class="in bin" value="'+h.bins+'" oninput="hB('+i+',this.value)"></div>'+
+      '<div class="r2"><span class="lbl">范围</span>'+
+      '<input class="in rng" value="'+h.rng+'" oninput="hR('+i+',this.value)">'+
+      '<span class="unit-lock" title="由关联量类型锁定，不可修改">'+(HUNIT[qTypeOf(h.q)]||'—')+'</span>'+
+      '<span class="log'+(h.log?' on':'')+'" onclick="hL('+i+')"><span class="ck">'+(h.log?'✓':'')+'</span>log</span>'+
+      '<span class="del" onclick="delH('+i+')">✕</span></div>';
+    hr.appendChild(row);
+  });
+  renderFoot();
+}
+function renderFoot(){
+  const cnt=LVS.filter(configured).length,c=cur();
+  $('footInfo').innerHTML='<span>已配置逻辑体 <b>'+cnt+'</b> / '+LVS.length+'</span>'+
+    '<span>当前 '+state.active+'：quantity <b>'+c.qs.length+'</b> · 直方图 <b>'+c.hs.length+'</b></span>';
+  $('mvBody').innerHTML='已配置逻辑体：'+(LVS.filter(configured).join('、')||'（无）')+'<br><span class="run-tip">✎ 双击 "RealWorld 分析" 可再次进入编辑</span>';
+}
+function addQ(){const c=cur();c.qs.push({name:'q'+(c.qs.length+1),type:'energyDeposit',f:null});renderRight();}
+function delQ(i){cur().qs.splice(i,1);renderRight();}
+function qN(i,v){cur().qs[i].name=v;renderFoot();}
+function qT(i,v){
+  const q=cur().qs[i];q.type=v;
+  if(!HUNIT[v]){const hs=cur().hs;for(let j=hs.length-1;j>=0;j--)if(hs[j].q===q.name){hs.splice(j,1);toast('「'+q.name+'」类型('+v+')不支持能谱，已移除其直方图');}}
+  renderRight();
+}
+function togF(i){const q=cur().qs[i];if(!q.f)q.f={t:'particle',p:'gamma'};q.fOpen=!q.fOpen;renderRight();}
+function fT(i,v){cur().qs[i].f.t=v;renderRight();}
+function fP(i,v){cur().qs[i].f.p=v;renderRight();}
+function delF(i){const q=cur().qs[i];q.f=null;q.fOpen=false;renderRight();}
+function addH(){const c=cur();const n=(c.qs.find(q=>HUNIT[q.type])||{}).name||'';c.hs.push({q:n,bins:100,rng:'0.01 – 2000.',log:true});renderRight();}
+function delH(i){cur().hs.splice(i,1);renderRight();}
+function hQ(i,v){cur().hs[i].q=v;renderRight();}
+function hB(i,v){cur().hs[i].bins=v;renderFoot();}
+function hR(i,v){cur().hs[i].rng=v;renderFoot();}
+function hL(i){cur().hs[i].log=!cur().hs[i].log;renderRight();}
+function closeM(ok){
+  $('mask').style.display='none';$('mv').style.display='block';
+  toast(ok?'✓ 配置已保存，返回主界面——点「▶ 运行」开始模拟':'已取消，本次配置未保存');
+}
+let tt;
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2600);}
+renderTree();renderRight();
+</script>
+</body></html>

@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh"><head><meta charset="UTF-8"><title>3dRad · Probe 分析弹窗原型</title><style>
+:root{--bg:#16171d;--p:#1f212b;--p2:#262936;--bd:#33364a;--ac:#4f8cff;--tx:#c9ccd6;--dm:#8a8d9a;--ok:#3fbf6f;--wr:#f0a94e;--red:#e05555}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#101116;color:var(--tx);font:13px/1.5 "Segoe UI",system-ui,sans-serif;padding:26px}
+h1{color:#fff;font-size:19px}.sub{color:var(--dm);margin:4px 0 20px}
+.tag{display:inline-block;font-size:10px;background:#33364a;color:var(--dm);padding:1px 8px;border-radius:8px;margin-left:8px;vertical-align:2px}
+.flow{display:flex;gap:10px;align-items:center;margin-bottom:24px;font-size:12px;color:var(--dm);flex-wrap:wrap}
+.flow .st{background:var(--p);border:1px solid var(--bd);border-radius:8px;padding:6px 12px;color:var(--tx)}
+.flow .st b{color:var(--ac)}.flow .ar{color:#555}
+.mask{position:fixed;inset:0;background:rgba(5,6,10,.62);display:flex;align-items:center;justify-content:center;z-index:10}
+.rw{width:1180px;max-width:97vw;background:var(--p);border:1px solid var(--bd);border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.6);overflow:hidden}
+.rw-head{background:var(--p2);padding:10px 16px;display:flex;align-items:center;border-bottom:1px solid var(--bd)}
+.rw-head .t{color:#fff;font-weight:600;font-size:13.5px}
+.rw-head .m{color:var(--dm);font-size:11px;margin-left:10px}
+.rw-head .x{margin-left:auto;color:var(--dm);cursor:pointer;font-size:15px;padding:0 6px}
+.rw-head .x:hover{color:#fff}
+.cols{display:flex;min-height:470px}
+.col{border-right:1px solid var(--bd)}.col:last-child{border-right:none}
+.col-h{background:#1b1e29;padding:8px 12px;font-size:12px;color:#fff;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px}
+.col-h .cnt{margin-left:auto;font-size:10.5px;color:var(--dm)}
+.col-h .cnt b{color:var(--ac)}
+.col-3d{flex:1.15;display:flex;flex-direction:column;min-width:520px}
+.scene-wrap{position:relative;flex:1;padding:10px;background:#101218}
+canvas{width:100%;height:100%;display:block;border:1px solid var(--bd);border-radius:8px;background:radial-gradient(1200px 600px at 50% 40%,#171a26,#0e0f15);cursor:grab}
+canvas.drag{cursor:grabbing}
+.scene-tip{position:absolute;right:16px;top:16px;font-size:10.5px;color:var(--dm);background:rgba(20,22,32,.8);border:1px solid var(--bd);padding:4px 9px;border-radius:6px}
+.scene-tip b{color:var(--ac)}
+.pr-bar{border-top:1px solid var(--bd);padding:6px 10px;display:flex;gap:5px;flex-wrap:wrap;align-items:center;background:#1b1e29}
+.pr-bar .lb{font-size:10.5px;color:var(--dm);margin-right:4px}
+.pchip{display:flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 9px;border-radius:6px;border:1px solid var(--bd);background:#191b24;cursor:pointer;white-space:nowrap}
+.pchip:hover{border-color:#4a4e6a}
+.pchip.sel{background:#26334f;border-color:var(--ac)}
+.pchip .ck{width:13px;height:13px;border:1px solid var(--bd);border-radius:3px;background:#16181f;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;flex-shrink:0}
+.pchip .ck.cfg{background:var(--ac);border-color:var(--ac)}
+.pchip .nm{font-family:Consolas,monospace;color:#e6e8f0}
+.pchip .sub{font-size:9.5px;color:var(--dm)}
+.pchip .del{color:#555;cursor:pointer;font-size:12px;padding:0 2px}
+.pchip .del:hover{color:var(--red)}
+.pr-add{margin-left:auto;color:var(--ac);cursor:pointer;font-size:11.5px;padding:3px 10px;border-radius:6px;border:1px dashed #33507f;white-space:nowrap}
+.pr-add:hover{background:#26334f}
+.col-form{flex:1;display:flex;flex-direction:column;min-width:420px;overflow:auto}
+.attr{padding:10px;border-bottom:1px solid var(--bd);display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:11px}
+.attr .lbl{color:var(--dm);font-size:10.5px}
+.attr .in{background:#0e0f15;border:1px solid var(--bd);border-radius:5px;padding:3px 6px;color:#fff;font:11.5px Consolas,monospace;width:70px}
+.attr .in.nm{width:76px}.attr .in.xy{width:52px}.attr .in.hf{width:52px}
+.attr select{background:#0e0f15;border:1px solid var(--bd);border-radius:5px;padding:3px 5px;color:var(--tx);font:11.5px Consolas,monospace}
+.sec-h{background:#1b1e29;padding:6px 12px;font-size:11.5px;color:#fff;border-top:1px solid var(--bd);border-bottom:1px solid var(--bd);display:flex;align-items:center}
+.sec-h .cnt{margin-left:auto;font-size:10px;color:var(--dm)}
+.sec-h .cnt b{color:var(--ac)}
+.q{padding:8px;border-bottom:1px solid var(--bd)}
+.q-head{display:flex;font-size:10.5px;color:var(--dm);padding:2px 8px 6px;gap:6px}
+.q-head .sp2{width:80px}.q-head .sp3{width:108px}.q-head .sp4{width:56px}
+.q-row{border:1px solid var(--bd);border-radius:8px;background:#191b24;margin-bottom:6px}
+.q-row .ln{display:flex;align-items:center;gap:6px;padding:6px 9px}
+.q-row .in{background:#0e0f15;border:1px solid var(--bd);border-radius:5px;padding:3px 7px;color:#fff;font:11.5px Consolas,monospace}
+.q-row .in.nm{width:80px}.q-row .in.sel{width:108px;appearance:none;color:var(--tx)}
+.unit-lock{width:50px;text-align:center;color:var(--ac);font-size:11px;background:#101218;border:1px solid var(--bd);border-radius:5px;padding:3px 5px;font:11.5px Consolas,monospace;user-select:none;flex-shrink:0}
+.q-row .fb{margin-left:auto;font-size:11px;color:var(--dm);border:1px solid var(--bd);border-radius:5px;padding:2px 9px;cursor:pointer;white-space:nowrap}
+.q-row .fb.on{color:#ffd580;border-color:#5a5d75;background:#241f12}
+.q-row .fb.hot{color:var(--ac);border-color:#33507f}
+.q-f{display:none;border-top:1px dashed var(--bd);padding:6px 9px;background:#101218;font-size:11.5px}
+.q-row.open .q-f{display:block}
+.q-f .k{color:var(--dm);font-size:10.5px;margin-bottom:4px}
+.fsel{display:flex;gap:6px;align-items:center}.fsel .in{flex:1}
+.fsel .fdel{color:var(--red);cursor:pointer;font-size:11px;white-space:nowrap}
+.q-add{padding:4px 10px;color:var(--ac);cursor:pointer;font-size:11.5px;text-align:center}
+.q-add:hover{background:#26334f;border-radius:6px}
+.q-note{font-size:10.5px;color:var(--dm);padding:0 8px}
+.h1{padding:8px}
+.h1-row{border:1px solid var(--bd);border-radius:8px;background:#191b24;padding:7px 10px;margin-bottom:6px}
+.h1-row .l1{display:flex;align-items:center;gap:6px;margin-bottom:6px}
+.h1-row .in{background:#0e0f15;border:1px solid var(--bd);border-radius:5px;padding:3px 7px;color:#fff;font:11.5px Consolas,monospace}
+.h1-row .in.q{width:66px;text-align:center}
+.h1-row .in.bin{width:50px;text-align:center}
+.h1-row .in.rng{width:114px;text-align:center}
+.h1-row .lbl{font-size:10.5px;color:var(--dm)}
+.h1-row .r2{display:flex;align-items:center;gap:6px}
+.log{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--dm);margin-left:auto}
+.log .ck{width:14px;height:14px;border:1px solid var(--bd);border-radius:3px;background:#0e0f15}
+.log.on .ck{background:var(--ac);border-color:var(--ac)}
+.h1-add{padding:4px 10px;color:var(--ac);cursor:pointer;font-size:11.5px;text-align:center}
+.h1-add:hover{background:#26334f;border-radius:6px}
+.h1-note{font-size:10.5px;color:var(--dm);padding:0 8px}
+.del{color:#555;cursor:pointer;font-size:13px;padding:0 3px}.del:hover{color:var(--red)}
+.empty{display:none;border:1px dashed #33364a;border-radius:8px;padding:14px 10px;text-align:center;color:var(--dm);font-size:11.5px;line-height:1.8}
+.empty b{color:var(--tx)}
+.rw-foot{background:var(--p2);border-top:1px solid var(--bd);padding:11px 16px;display:flex;align-items:center;gap:10px}
+.rw-foot .info{font-size:11px;color:var(--dm);display:flex;gap:14px;flex-wrap:wrap}
+.rw-foot .info b{color:var(--tx)}
+.rw-foot .sp{flex:1}
+.btn{padding:7px 20px;border-radius:7px;border:1px solid var(--bd);background:#292c3a;color:#fff;font-size:12.5px;cursor:pointer}
+.btn:hover{border-color:#4a4e6a}
+.btn.p{background:var(--ac);border-color:var(--ac);font-weight:600}
+.btn.p:hover{background:#5f9aff}
+.main-view{max-width:1180px;background:var(--p);border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:20px}
+.mv-bar{background:var(--p2);padding:9px 14px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--bd);font-size:12px}
+.mv-bar .mv-t{color:#fff;font-weight:600;font-size:13px}
+.mv-bar .mv-p{color:var(--dm)}.mv-bar .mv-p b{color:var(--tx)}
+.mv-body{padding:18px 16px;color:var(--dm);font-size:12.5px;line-height:1.9}
+.mv-body .run-tip{color:var(--wr)}
+.toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(12px);background:#17241b;border:1px solid var(--ok);color:#cff0d8;padding:9px 20px;border-radius:8px;font-size:12.5px;opacity:0;pointer-events:none;transition:.25s;z-index:99}
+.toast.show{opacity:1;transform:translateX(-50%)}
+.legend{max-width:1180px;margin:22px auto 0;font-size:12px;color:var(--dm);line-height:1.9}
+.legend b{color:var(--tx)}.legend .hl{color:var(--ac)}
+</style></head><body>
+
+<h1>Probe 分析弹窗原型 <span class="tag">axes.gdml 示例</span></h1>
+<div class="sub">模态弹窗 · 左 3D（内嵌实时编辑）+ 右表单 · 与 voxel 同构</div>
+
+<div class="flow">
+  <span class="st">项目树<br><b>Runs</b> → Analysis</span><span class="ar">→</span>
+  <span class="st">双击 <b>Probe 分析</b><br><span style="color:var(--dm);font-size:11px">（模态）</span></span><span class="ar">→</span>
+  <span class="st">表单输入坐标/尺寸<br><span style="color:var(--dm);font-size:11px">3D 实时显示探针与几何的关系</span></span><span class="ar">→</span>
+  <span class="st">主界面点 <b style="color:var(--ok)">▶ 运行</b></span>
+</div>
+
+<div class="main-view" id="mv" style="display:none">
+  <div class="mv-bar">
+    <span class="mv-t">3dRad</span>
+    <span class="mv-p">项目树 / <b>RunSet 01</b> / Probe 分析</span>
+    <span style="flex:1"></span>
+    <span class="btn p" onclick="toast('▶ 开始运行模拟（此处对接 RunManager）')">▶ 运行</span>
+  </div>
+  <div class="mv-body" id="mvBody"></div>
+</div>
+
+<div class="mask">
+  <div class="rw">
+    <div class="rw-head">
+      <span class="t">Probe 分析设置</span>
+      <span class="m">axes.gdml · 立方体探针评分（一个探针 = 一个 /score/create/probe 块）</span>
+      <span class="x">✕</span>
+    </div>
+    <div class="cols">
+      <div class="col col-3d">
+        <div class="col-h">3D 场景<span class="cnt">旋转/缩放查看 · 表单输入定位</span></div>
+        <div class="scene-wrap">
+          <canvas id="scene" width="900" height="520"></canvas>
+          <div class="scene-tip">俯视 XZ · 滚轮缩放 · 位置/尺寸在右侧表单输入</div>
+        </div>
+        <div class="pr-bar">
+          <span class="lb">探针</span>
+          <div id="prChips" style="display:contents"></div>
+          <span class="pr-add" onclick="addProbe()">+ 添加探针（默认居中）</span>
+        </div>
+      </div>
+      <div class="col col-form">
+        <div class="col-h">探针属性 <span class="cnt" id="prTitle"></span></div>
+        <div class="attr">
+          <span class="lbl">名称</span><input class="in nm" id="aName" oninput="pN(this.value)">
+          <span class="lbl">半尺寸</span><input class="in hf" id="aHalf" type="number" min="0.1" step="0.5" oninput="pH(this.value)">
+          <span class="lbl">位置</span>
+          <span class="lbl" style="margin-left:4px">x</span><input class="in xy" id="aX" type="number" step="0.5" oninput="pX(this.value)">
+          <span class="lbl">y</span><input class="in xy" id="aY" type="number" step="0.5" oninput="pY(this.value)">
+          <span class="lbl">z</span><input class="in xy" id="aZ" type="number" step="0.5" oninput="pZ(this.value)">
+          <span class="lbl" style="margin-left:4px">材料</span>
+          <select id="aMat" onchange="pM(this.value)"></select>
+          <span style="flex:1"></span>
+          <span class="lbl" id="ovTip" style="color:var(--wr)"></span>
+        </div>
+        <div class="sec-h">Quantity<span class="cnt" id="qTitle"></span></div>
+        <div class="q">
+          <div class="q-head"><span class="sp2">名称</span><span class="sp3">类型</span><span class="sp4">单位(锁)</span><span style="flex:1">filter</span></div>
+          <div id="qRows"></div>
+          <div class="empty" id="qEmpty"></div>
+          <div class="q-add" onclick="addQ()">+ 添加 quantity</div>
+          <div class="q-note">15 种 realWorld 可用类型全开放；仅 10 种可挂能谱</div>
+        </div>
+        <div class="sec-h">能谱直方图（/score/fill1D）<span class="cnt" id="hTitle"></span></div>
+        <div class="h1">
+          <div id="hRows"></div>
+          <div class="empty" id="hEmpty"></div>
+          <div class="h1-add" onclick="addH()">+ 添加直方图</div>
+          <div class="h1-note">x 轴单位由关联量锁定：eDep→MeV · dose→Gy · 通量类→MeV · nOfStep→mm</div>
+        </div>
+      </div>
+    </div>
+    <div class="rw-foot">
+      <span class="info" id="footInfo"></span>
+      <span class="sp"></span>
+      <span class="btn" onclick="closeM(false)">取消</span>
+      <span class="btn p" onclick="closeM(true)">确认</span>
+    </div>
+  </div>
+</div>
+
+<div class="legend">
+  <b>设计要点（内嵌 3D 编辑版）：</b><br>
+  1. <b class="hl">一直可视化</b>：3D 场景内嵌在弹窗里，不是 preview 后弹窗——探针位置/大小与几何的关系随时可见。<br>
+  2. <b class="hl">表单输入 + 3D 查看</b>：坐标/尺寸在右侧表单输入，3D 实时刷新显示探针与几何的位置关系；3D 只做旋转/缩放，不做编辑。<br>
+  3. <b class="hl">与 voxel 同构</b>：voxel 是"网格框 + nBin"，probe 是"探针盒 + 拖拽定位"，同一套内嵌 3D 编辑框架。<br>
+  4. <b class="hl">添加即所见</b>：点「+ 添加探针」→ 场景中心出现默认 5cm 探针并自动选中，在右侧输入坐标定位到目标位置。<br>
+  5. <b class="hl">联动规则同 realworld</b>：点选探针 → 右侧刷新其专属 quantity/直方图；☑=已配置自动联动；单位锁定；filter 行内展开。<br>
+  6. <b class="hl">一个探针一个位置</b>：多位置 = 添加多个探针（每个独立 mesh），fill1D 与 CSV 按探针一一对应。<br>
+  7. 材料 = 覆盖探针处材料供剂量计算，默认 G4_WATER，可选 none 关闭覆盖。<br>
+  8. 生成 mac：每个探针一个 <code>/score/create/probe &lt;名&gt; &lt;半尺寸&gt; cm</code> 块 + material + locate + 自己的 quantity/直方图。
+</div>
+
+<script>
+const MATS=['G4_WATER','G4_AIR','G4_Al','G4_Cu','G4_Fe','G4_Pb','none'];
+const QTYPES=['energyDeposit','doseDeposit','volumeFlux','nOfStep','nOfTrack','nOfSecondary','cellFlux','passageCellFlux','passageCellCurrent','passageTrackLength','trackLength','cellCharge','nOfCollision','nOfTerminatedTrack','population'];
+const FTYPES=['particle','kineticEnergy','particleWithEnergy','charged','neutral'];
+const PARTICLES=['gamma','e-','e+','proton','neutron','alpha'];
+const QUNIT={energyDeposit:'MeV',doseDeposit:'Gy',volumeFlux:'—',nOfStep:'—',nOfTrack:'—',nOfSecondary:'—',cellFlux:'cm⁻²',passageCellFlux:'cm⁻²',passageCellCurrent:'—',passageTrackLength:'mm',trackLength:'mm',cellCharge:'e⁺',nOfCollision:'—',nOfTerminatedTrack:'—',population:'—'};
+const HUNIT={energyDeposit:'MeV',doseDeposit:'Gy',volumeFlux:'MeV',nOfStep:'mm',nOfTrack:'MeV',nOfSecondary:'MeV',cellFlux:'MeV',passageCellFlux:'MeV',passageCellCurrent:'MeV',passageTrackLength:'mm'};
+const PCOLORS=['#4f8cff','#f0a94e','#3fbf6f','#e05555','#b48cff'];
+const state={active:0,probes:[
+  {name:'P1',half:5,loc:{x:0,y:0,z:0},mat:'G4_WATER',qs:[{name:'q1',type:'volumeFlux',f:null}],hs:[{q:'q1',bins:100,rng:'0.01 – 2000.',log:true}]},
+  {name:'P2',half:5,loc:{x:25,y:0,z:0},mat:'G4_WATER',qs:[],hs:[]}
+]};
+const $=id=>document.getElementById(id);
+const cur=()=>state.probes[state.active];
+const qTypeOf=qn=>{const t=cur().qs.find(x=>x.name===qn);return t?t.type:''};
+const histOpts=cu=>{
+  const c=cur();const names=c.qs.filter(q=>HUNIT[q.type]).map(q=>q.name);
+  let s='';
+  if(cu&&names.indexOf(cu)<0)s+='<option selected>'+cu+'（不可用）</option>';
+  return s+names.map(n=>'<option'+(n===cu?' selected':'')+'>'+n+'</option>').join('');
+};
+const configured=p=>p.qs.length>0||p.hs.length>0;
+const fmtLoc=p=>'@('+p.loc.x.toFixed(1)+','+p.loc.y.toFixed(1)+','+p.loc.z.toFixed(1)+') '+p.half+'cm '+p.mat;
+
+function renderChips(){
+  const box=$('prChips');box.innerHTML='';
+  state.probes.forEach((p,i)=>{
+    const el=document.createElement('div');
+    el.className='pchip'+(state.active===i?' sel':'');
+    el.innerHTML='<span class="ck'+(configured(p)?' cfg':'')+'">'+(configured(p)?'✓':'')+'</span>'+
+      '<span class="nm">'+p.name+'</span><span class="sub">'+fmtLoc(p)+'</span>'+
+      '<span class="del" onclick="delProbe('+i+')">✕</span>';
+    el.onclick=e=>{if(e.target.classList.contains('del'))return;state.active=i;renderAll();};
+    box.appendChild(el);
+  });
+}
+function renderAttr(){
+  const p=cur();
+  $('prTitle').innerHTML='<b>'+p.name+'</b>';
+  $('aName').value=p.name;$('aHalf').value=p.half;
+  $('aX').value=p.loc.x;$('aY').value=p.loc.y;$('aZ').value=p.loc.z;
+  $('aMat').innerHTML=MATS.map(m=>'<option'+(m===p.mat?' selected':'')+'>'+m+'</option>').join('');
+  $('ovTip').textContent=p.mat==='none'?'材料覆盖已关闭（用几何原材料计算）':'材料覆盖：剂量用 '+p.mat+' 计算';
+}
+function renderQ(){
+  const c=cur();
+  $('qTitle').innerHTML='<b>'+c.qs.length+'</b>';
+  const qr=$('qRows');qr.innerHTML='';
+  $('qEmpty').style.display=c.qs.length?'none':'block';
+  $('qEmpty').innerHTML='<b>'+c.name+'</b> 尚未配置 quantity<br>点击下方「+ 添加 quantity」开始';
+  c.qs.forEach((q,i)=>{
+    const row=document.createElement('div');row.className='q-row'+(q.fOpen?' open':'');
+    row.innerHTML='<div class="ln">'+
+      '<input class="in nm" value="'+q.name+'" oninput="qN('+i+',this.value)">'+
+      '<select class="in sel" onchange="qT('+i+',this.value)">'+QTYPES.map(t=>'<option'+(t===q.type?' selected':'')+'>'+t+'</option>').join('')+'</select>'+
+      '<span class="unit-lock" title="由类型锁定">'+QUNIT[q.type]+'</span>'+
+      '<span class="fb '+(q.f?'on':'hot')+'" onclick="togF('+i+')">'+(q.f?('✓ '+q.f.p):'+ filter')+'</span>'+
+      '<span class="del" onclick="delQ('+i+')">✕</span></div>'+
+      '<div class="q-f"><div class="k">filter 类型（紧跟此 quantity 写入 mac）</div><div class="fsel">'+
+      '<select class="in" onchange="fT('+i+',this.value)">'+FTYPES.map(t=>'<option'+(q.f&&q.f.t===t?' selected':'')+'>'+t+'</option>').join('')+'</select>'+
+      '<select class="in" onchange="fP('+i+',this.value)">'+PARTICLES.map(p=>'<option'+(q.f&&q.f.p===p?' selected':'')+'>'+p+'</option>').join('')+'</select>'+
+      (q.f?'<span class="fdel" onclick="delF('+i+')">✕ 删除 filter</span>':'')+
+      '</div></div>';
+    qr.appendChild(row);
+  });
+}
+function renderH(){
+  const c=cur();
+  $('hTitle').innerHTML='<b>'+c.hs.length+'</b>';
+  const hr=$('hRows');hr.innerHTML='';
+  $('hEmpty').style.display=c.hs.length?'none':'block';
+  $('hEmpty').innerHTML='<b>'+c.name+'</b> 尚未配置能谱直方图<br>添加后左侧探针自动打勾';
+  c.hs.forEach((h,i)=>{
+    const row=document.createElement('div');row.className='h1-row';
+    row.innerHTML='<div class="l1"><span class="lbl">关联量</span>'+
+      '<select class="in q" onchange="hQ('+i+',this.value)">'+(histOpts(h.q)||'<option disabled selected>（无可用量）</option>')+'</select>'+
+      '<span class="lbl">bins</span><input class="in bin" value="'+h.bins+'" oninput="hB('+i+',this.value)"></div>'+
+      '<div class="r2"><span class="lbl">范围</span>'+
+      '<input class="in rng" value="'+h.rng+'" oninput="hR('+i+',this.value)">'+
+      '<span class="unit-lock" title="由关联量类型锁定">'+(HUNIT[qTypeOf(h.q)]||'—')+'</span>'+
+      '<span class="log'+(h.log?' on':'')+'" onclick="hL('+i+')"><span class="ck">'+(h.log?'✓':'')+'</span>log</span>'+
+      '<span class="del" onclick="delH('+i+')">✕</span></div>';
+    hr.appendChild(row);
+  });
+}
+function renderFoot(){
+  const cnt=state.probes.filter(configured).length,p=cur();
+  $('footInfo').innerHTML='<span>已配置探针 <b>'+cnt+'</b> / '+state.probes.length+'</span>'+
+    '<span>当前 '+p.name+'：quantity <b>'+p.qs.length+'</b> · 直方图 <b>'+p.hs.length+'</b></span>';
+  $('mvBody').innerHTML='已配置探针：'+(state.probes.filter(configured).map(x=>x.name).join('、')||'（无）')+
+    '<br>mac 将为每个探针生成独立的 /score/create/probe 块<br><span class="run-tip">✎ 双击 "Probe 分析" 可再次进入编辑</span>';
+}
+function renderAll(){renderChips();renderAttr();renderQ();renderH();renderFoot();drawScene();}
+
+function addProbe(){
+  const i=state.probes.length;
+  state.probes.push({name:'P'+(i+1),half:5,loc:{x:0,y:0,z:0},mat:'G4_WATER',qs:[],hs:[]});
+  state.active=i;renderAll();
+  toast('已添加 '+state.probes[i].name+'（场景中心 5cm）——在右侧输入坐标定位');
+}
+function delProbe(i){
+  state.probes.splice(i,1);
+  if(state.active>=state.probes.length)state.active=state.probes.length-1;
+  if(state.active<0)state.active=0;
+  renderAll();
+}
+function pN(v){cur().name=v;renderAttr();renderChips();renderFoot();}
+function pH(v){cur().half=Math.max(0.1,parseFloat(v)||cur().half);renderChips();renderFoot();drawScene();}
+function pX(v){cur().loc.x=parseFloat(v)||0;renderChips();drawScene();}
+function pY(v){cur().loc.y=parseFloat(v)||0;renderChips();}
+function pZ(v){cur().loc.z=parseFloat(v)||0;renderChips();drawScene();}
+function pM(v){cur().mat=v;renderChips();renderAttr();}
+function qN(i,v){cur().qs[i].name=v;renderQ();renderH();renderFoot();}
+function qT(i,v){
+  const q=cur().qs[i];q.type=v;
+  if(!HUNIT[v]){const hs=cur().hs;for(let j=hs.length-1;j>=0;j--)if(hs[j].q===q.name){hs.splice(j,1);toast('「'+q.name+'」类型('+v+')不支持能谱，已移除其直方图');}}
+  renderQ();renderH();renderFoot();
+}
+function addQ(){const c=cur();c.qs.push({name:'q'+(c.qs.length+1),type:'energyDeposit',f:null});renderQ();renderFoot();}
+function delQ(i){cur().qs.splice(i,1);renderQ();renderH();renderFoot();}
+function togF(i){const q=cur().qs[i];if(!q.f)q.f={t:'particle',p:'gamma'};q.fOpen=!q.fOpen;renderQ();}
+function fT(i,v){cur().qs[i].f.t=v;renderQ();}
+function fP(i,v){cur().qs[i].f.p=v;renderQ();}
+function delF(i){const q=cur().qs[i];q.f=null;q.fOpen=false;renderQ();}
+function addH(){const c=cur();const n=(c.qs.find(q=>HUNIT[q.type])||{}).name||'';c.hs.push({q:n,bins:100,rng:'0.01 – 2000.',log:true});renderH();renderFoot();}
+function delH(i){cur().hs.splice(i,1);renderH();renderFoot();}
+function hQ(i,v){cur().hs[i].q=v;renderH();}
+function hB(i,v){cur().hs[i].bins=v;renderFoot();}
+function hR(i,v){cur().hs[i].rng=v;renderFoot();}
+function hL(i){cur().hs[i].log=!cur().hs[i].log;renderH();}
+function closeM(ok){
+  $('mask').style.display='none';$('mv').style.display='block';
+  toast(ok?'✓ 配置已保存，返回主界面——点「▶ 运行」开始模拟':'已取消，本次配置未保存');
+}
+let tt;
+function toast(m){const t=$('toast');t.textContent=m;t.classList.add('show');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('show'),2600);}
+
+/* ---- 3D 场景（俯视 XZ 平面，示意；真实落地为 VTK 可旋转/缩放） ---- */
+const cv=$('scene'),ctx=cv.getContext('2d');
+const WORLD=60,CX0=450,CY0=260;let S=7.5;
+const GEO=[
+  {x:-10,z:-8,w:40,d:16,name:'vXBox'},
+  {x:-10,z:8,w:40,d:16,name:'vYBox'},
+  {x:-10,z:-24,w:40,d:16,name:'vZBox'},
+  {x:-45,z:-45,w:18,d:18,name:'vArrow×3'}
+];
+const w2px=x=>CX0+x*S, w2py=z=>CY0-z*S;
+function drawScene(){
+  ctx.clearRect(0,0,cv.width,cv.height);
+  /* 网格 */
+  ctx.strokeStyle='rgba(90,100,130,.18)';ctx.lineWidth=1;
+  for(let g=-60;g<=60;g+=15){
+    ctx.beginPath();ctx.moveTo(w2px(g),0);ctx.lineTo(w2px(g),cv.height);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,w2py(g));ctx.lineTo(cv.width,w2py(g));ctx.stroke();
+  }
+  /* 世界边界 */
+  ctx.strokeStyle='#5a6178';ctx.setLineDash([6,4]);
+  ctx.strokeRect(w2px(-WORLD),w2py(WORLD),2*WORLD*S,2*WORLD*S);ctx.setLineDash([]);
+  /* 几何逻辑体 */
+  GEO.forEach(g=>{
+    ctx.fillStyle='rgba(60,68,92,.30)';ctx.strokeStyle='#6a7188';ctx.lineWidth=1.2;
+    ctx.fillRect(w2px(g.x),w2py(g.z+g.d),g.w*S,g.d*S);
+    ctx.strokeRect(w2px(g.x),w2py(g.z+g.d),g.w*S,g.d*S);
+    ctx.fillStyle='#9aa0b0';ctx.font='11px Consolas';
+    ctx.fillText(g.name,w2px(g.x)+4,w2py(g.z+g.d)-4);
+  });
+  /* 原点标记 */
+  ctx.fillStyle='#f0a94e';ctx.beginPath();ctx.arc(w2px(0),w2py(0),3.5,0,7);ctx.fill();
+  ctx.fillStyle='#f0a94e';ctx.font='10px Consolas';ctx.fillText('origin',w2px(0)+6,w2py(0)-6);
+  /* 坐标轴 */
+  ctx.strokeStyle='#4f8cff';ctx.lineWidth=1.4;
+  ctx.beginPath();ctx.moveTo(w2px(-58),w2py(0));ctx.lineTo(w2px(58),w2py(0));ctx.stroke();
+  ctx.strokeStyle='#3fbf6f';
+  ctx.beginPath();ctx.moveTo(w2px(0),w2py(58));ctx.lineTo(w2px(0),w2py(-58));ctx.stroke();
+  ctx.fillStyle='#4f8cff';ctx.font='bold 12px Consolas';ctx.fillText('X',w2px(56),w2py(0)+14);
+  ctx.fillStyle='#3fbf6f';ctx.fillText('Z',w2px(0)+6,w2py(56));
+  /* 探针 */
+  state.probes.forEach((p,i)=>{
+    const px=w2px(p.loc.x),py=w2py(p.loc.z),hs=p.half*S,c=PCOLORS[i%PCOLORS.length];
+    const sel=state.active===i;
+    ctx.fillStyle=sel?'rgba(79,140,255,.16)':'rgba(79,140,255,.07)';
+    ctx.strokeStyle=c;ctx.lineWidth=sel?2.5:1.6;ctx.setLineDash(sel?[]:[4,3]);
+    ctx.fillRect(px-hs,py-hs,2*hs,2*hs);
+    ctx.strokeRect(px-hs,py-hs,2*hs,2*hs);ctx.setLineDash([]);
+    ctx.fillStyle=c;ctx.font=(sel?'bold ':'')+'11px Consolas';
+    ctx.fillText(p.name+' '+p.half+'cm',px+hs+4,py-hs+10);
+    ctx.fillStyle='rgba(200,210,230,.85)';ctx.font='10px Consolas';
+    ctx.fillText('@('+p.loc.x.toFixed(1)+','+p.loc.y.toFixed(1)+','+p.loc.z.toFixed(1)+')',px+hs+4,py-hs+22);
+  });
+}
+cv.addEventListener('wheel',e=>{
+  e.preventDefault();
+  S=Math.max(2.5,Math.min(26,S*(e.deltaY<0?1.12:0.9)));drawScene();
+},{passive:false});
+renderAll();
+</script>
+</body></html>
