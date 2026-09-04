@@ -1,72 +1,171 @@
 """
-RunMonitorDialog — non-modal dialog for monitoring task execution.
+Run launcher + task monitor dialogs (two independent windows).
 
-The UI shell is modeled on 1dRad (emoji status / progress bar / Select All /
-Run Log) and is driven by RunManager signals instead of keeping its own state.
-Light theme by default (3dRad defaults to white). Adds a "➕ Add Task" button.
+Design agreed with the user:
+  - "Run" toolbar button  -> RunMonitorDialog  : slim launcher. Rows carry a
+    checkbox (select tasks), two columns (task name / status). A "Run
+    Selected" button sits at the top right and is greyed out while any task is
+    running, so repeated clicks cannot double-start tasks. No progress bars,
+    no run log, no select-all row.
+  - "Idle" toolbar button -> TaskMonitorDialog : per-task rows with checkbox,
+    status, a progress bar while running, a per-row "cancel" button and a
+    "Run Selected" / "Stop All" pair at the top right. No run log, no
+    select-all row.
+Both dialogs are non-modal and are driven by RunManager signals.
 """
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QProgressBar, QCheckBox, QTextEdit, QScrollArea, QWidget,
-    QFrame, QGroupBox,
+    QProgressBar, QCheckBox, QTreeWidget, QTreeWidgetItem,
+    QFrame, QWidget, QScrollArea, QHeaderView,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtGui import QColor
+
+STATUS_META = {
+    "idle":      ("⏸", "Idle",      QColor("#808080")),
+    "queued":    ("⏳", "Queued",    QColor("#b58900")),
+    "running":   ("🔄", "Running",   QColor("#0078d4")),
+    "completed": ("✅", "Completed", QColor("#2e8b57")),
+    "failed":    ("❌", "Failed",    QColor("#c0392b")),
+    "stopped":   ("⏹", "Stopped",   QColor("#c0392b")),
+}
 
 
-class _TaskProgressWidget(QFrame):
-    """Progress display for a single task."""
+def _status_text(status: str) -> str:
+    emoji, label, _color = STATUS_META.get(status, STATUS_META["idle"])
+    return f"{emoji} {label}"
 
-    def __init__(self, task_name: str, parent=None):
+
+def _status_color(status: str) -> QColor:
+    return STATUS_META.get(status, STATUS_META["idle"])[2]
+
+
+def _styles(dark: bool) -> str:
+    """Shared stylesheet for both dialogs (light theme by default)."""
+    if dark:
+        return """
+            QDialog { background-color: #1e1e2e; }
+            QLabel { color: #cdd6f4; font-size: 12px; }
+            QCheckBox { color: #cdd6f4; font-size: 12px; }
+            QTreeWidget {
+                background-color: #11111b; color: #cdd6f4;
+                border: 1px solid #45475a; border-radius: 6px;
+                font-size: 12px;
+            }
+            QTreeWidget::item { height: 24px; }
+            QTreeWidget::item:selected {
+                background-color: #313244; color: #cdd6f4;
+            }
+            QProgressBar {
+                background-color: #1e1e2e; color: #cdd6f4;
+                border: none; border-radius: 4px;
+                text-align: center; font-size: 11px;
+            }
+            QProgressBar::chunk { background-color: #89b4fa; border-radius: 4px; }
+            QPushButton {
+                background-color: #313244; color: #cdd6f4;
+                border: 1px solid #45475a; border-radius: 6px;
+                padding: 6px 18px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #45475a; border: 1px solid #89b4fa; }
+            QPushButton:disabled { color: rgba(140,140,140,0.5); }
+            QScrollBar:vertical { background-color: #1e1e2e; width: 8px; }
+            QScrollBar::handle:vertical { background-color: #45475a; border-radius: 4px; }
+        """
+    return """
+        QDialog { background-color: #f5f5f5; }
+        QLabel { color: #2c2c2c; font-size: 12px; }
+        QCheckBox { color: #2c2c2c; font-size: 12px; }
+        QTreeWidget {
+            background-color: #ffffff; color: #2c2c2c;
+            border: 1px solid #d0d0d0; border-radius: 6px;
+            font-size: 12px;
+        }
+        QTreeWidget::item { height: 24px; }
+        QTreeWidget::item:selected {
+            background-color: #e4e7eb; color: #2c2c2c;
+        }
+        QProgressBar {
+            background-color: #ffffff; color: #2c2c2c;
+            border: 1px solid #d0d0d0; border-radius: 4px;
+            text-align: center; font-size: 11px;
+        }
+        QProgressBar::chunk { background-color: #0078d4; border-radius: 4px; }
+        QPushButton {
+            background-color: #f0f0f0; color: #2c2c2c;
+            border: 1px solid #d0d0d0; border-radius: 6px;
+            padding: 6px 18px; font-size: 12px;
+        }
+        QPushButton:hover { background-color: #e4e7eb; border: 1px solid #0078d4; }
+        QPushButton:disabled { color: rgba(140,140,140,0.5); }
+        QScrollBar:vertical { background-color: #f0f0f0; width: 8px; }
+        QScrollBar::handle:vertical { background-color: #c0c0c0; border-radius: 4px; }
+    """
+
+
+class _TaskRowWidget(QFrame):
+    """One task row inside the task monitor (Idle window): checkbox + name,
+    status on the right, a progress bar and a per-row cancel button."""
+
+    cancel_requested = pyqtSignal(str)   # task name
+
+    def __init__(self, task_name: str, dark: bool = False, parent=None):
         super().__init__(parent)
+        self._dark = dark
+        self._name = task_name
+        self._setup_ui()
+        self.set_dark_theme(dark)
+
+    def _setup_ui(self):
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self._dark = False
-        self._setup_ui(task_name)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(4)
 
-    def _setup_ui(self, name: str):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        layout.setSpacing(4)
-
-        header = QHBoxLayout()
-        self._checkbox = QCheckBox(name)
+        head = QHBoxLayout()
+        self._checkbox = QCheckBox(self._name)
         self._checkbox.setChecked(True)
-        header.addWidget(self._checkbox)
-        header.addStretch()
-        self._status_label = QLabel("⏳ Queued")
-        self._status_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        header.addWidget(self._status_label)
-        layout.addLayout(header)
+        self._checkbox.setStyleSheet("font-weight: bold;")
+        head.addWidget(self._checkbox)
+        head.addStretch()
+
+        self._status_label = QLabel(_status_text("idle"))
+        head.addWidget(self._status_label)
+
+        self._cancel_btn = QPushButton("✕ Cancel")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(
+            lambda: self.cancel_requested.emit(self._name))
+        head.addWidget(self._cancel_btn)
+        lay.addLayout(head)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
         self._progress.setValue(0)
-        self._progress.setTextVisible(True)
-        self._progress.setFixedHeight(20)
-        layout.addWidget(self._progress)
-
-        self._time_label = QLabel("")
-        layout.addWidget(self._time_label)
+        self._progress.setFixedHeight(18)
+        lay.addWidget(self._progress)
 
     def set_status(self, status: str, progress: int = 0,
                    run_time: str = ""):
-        emoji_map = {
-            "idle": "⏸", "queued": "⏳", "running": "🔄",
-            "completed": "✅", "failed": "❌", "stopped": "⏹",
-        }
-        emoji = emoji_map.get(status, "⏳")
-        self._status_label.setText(f"{emoji} {status.capitalize()}")
-        self._progress.setValue(progress)
-        if run_time:
-            self._time_label.setText(f"Run time: {run_time}")
+        self._status_label.setText(_status_text(status))
+        color = _status_color(status)
+        self._status_label.setStyleSheet(f"color: {color.name()};")
+        if status == "running":
+            self._progress.setVisible(True)
+            self._progress.setValue(progress)
+            self._cancel_btn.setEnabled(True)
+        elif status == "queued":
+            self._progress.setVisible(True)
+            self._progress.setValue(0)
+            self._cancel_btn.setEnabled(True)
+        else:
+            self._progress.setVisible(False)
+            self._progress.setValue(0)
+            self._cancel_btn.setEnabled(False)
 
     def is_selected(self) -> bool:
         return self._checkbox.isChecked()
-
-    def get_task_name(self) -> str:
-        return self._checkbox.text()
 
     def set_dark_theme(self, dark: bool):
         self._dark = dark
@@ -74,129 +173,224 @@ class _TaskProgressWidget(QFrame):
             self.setStyleSheet("""
                 QFrame {
                     background-color: #313244;
-                    border: 1px solid #45475a;
-                    border-radius: 6px;
+                    border: 1px solid #45475a; border-radius: 6px;
                 }
-                QCheckBox { color: #cdd6f4; font-size: 12px; font-weight: bold; }
-                QLabel { color: #cdd6f4; font-size: 12px; }
-                QProgressBar {
-                    background-color: #1e1e2e; color: #cdd6f4;
-                    border: none; border-radius: 4px;
-                    text-align: center; font-size: 11px;
-                }
-                QProgressBar::chunk { background-color: #89b4fa; border-radius: 4px; }
+                QCheckBox { color: #cdd6f4; font-size: 12px; }
             """)
         else:
             self.setStyleSheet("""
                 QFrame {
                     background-color: #f5f5f5;
-                    border: 1px solid #e0e0e0;
-                    border-radius: 6px;
+                    border: 1px solid #e0e0e0; border-radius: 6px;
                 }
-                QCheckBox { color: #2c2c2c; font-size: 12px; font-weight: bold; }
-                QLabel { color: #2c2c2c; font-size: 12px; }
-                QProgressBar {
-                    background-color: #ffffff; color: #2c2c2c;
-                    border: 1px solid #d0d0d0; border-radius: 4px;
-                    text-align: center; font-size: 11px;
-                }
-                QProgressBar::chunk { background-color: #0078d4; border-radius: 4px; }
+                QCheckBox { color: #2c2c2c; font-size: 12px; }
             """)
 
 
 class RunMonitorDialog(QDialog):
-    """Non-modal run monitor - the user can keep interacting with the main
-    window while tasks are running."""
+    """Run launcher (Run toolbar button): select tasks and start them.
+
+    A two-column table (task name / status) under the control bar; no run log
+    and no progress bars here - progress lives in the task monitor opened by
+    the Idle/status button. The "Run Selected" button is greyed out while any
+    task is running to prevent double-starting.
+    """
 
     run_selected = pyqtSignal(list)   # names of the selected tasks
-    stop_all = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._dark = False
-        self._task_widgets: dict[str, _TaskProgressWidget] = {}
+        self._items: dict[str, QTreeWidgetItem] = {}
 
-        self.setWindowTitle("▶️ Run Monitor")
-        self.setMinimumSize(550, 750)
-        self.resize(600, 900)
+        # Same aspect as the main window (1400x900), i.e. width:height ~ 3:2.
+        self.setWindowTitle("Run")
+        self.setMinimumSize(560, 360)
+        self.resize(700, 450)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setModal(False)
         self.setWindowFlags(
-            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
-        )
+            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
         self._setup_ui()
+        self._apply_theme(False)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
         layout.setContentsMargins(12, 12, 12, 12)
 
-        control_bar = QHBoxLayout()
-        self._select_all_cb = QCheckBox("☐ Select All")
-        self._select_all_cb.setChecked(True)
-        self._select_all_cb.stateChanged.connect(self._on_select_all)
-        control_bar.addWidget(self._select_all_cb)
-        control_bar.addStretch()
-
-        hint = QLabel("To add a task, right-click Tasks in the project tree")
-        hint.setStyleSheet("color: #888888; font-size: 11px;")
-        control_bar.addWidget(hint)
-
-        self._run_btn = QPushButton("▶️ Run Selected")
+        bar = QHBoxLayout()
+        bar.addWidget(QLabel("Select tasks to run"))
+        bar.addStretch()
+        self._run_btn = QPushButton("Run Selected")
+        self._run_btn.setEnabled(False)
         self._run_btn.clicked.connect(self._on_run)
-        control_bar.addWidget(self._run_btn)
+        bar.addWidget(self._run_btn)
+        layout.addLayout(bar)
 
-        self._stop_btn = QPushButton("⏹ Stop All")
+        self._tree = QTreeWidget()
+        self._tree.setColumnCount(2)
+        self._tree.setHeaderLabels(["Task", "Status"])
+        self._tree.setRootIsDecorated(False)
+        self._tree.setSelectionMode(QTreeWidget.SelectionMode.NoSelection)
+        # The two columns share the available width equally (50/50).
+        header = self._tree.header()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setStretchLastSection(False)
+        layout.addWidget(self._tree, 1)
+
+        hint = QLabel(
+            "To add a task, right-click \"Tasks\" in the project tree.")
+        hint.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addWidget(hint)
+
+    # ---- Task management ----
+
+    def add_task(self, task_name: str):
+        if task_name in self._items:
+            return
+        item = QTreeWidgetItem([task_name, _status_text("idle")])
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setCheckState(0, Qt.CheckState.Checked)
+        self._tree.addTopLevelItem(item)
+        self._items[task_name] = item
+        self._run_btn.setEnabled(len(self._items) > 0)
+
+    def sync_tasks(self, names: list):
+        for name in list(self._items):
+            if name not in names:
+                self._tree.takeTopLevelItem(
+                    self._tree.indexOfTopLevelItem(self._items.pop(name)))
+        for name in names:
+            self.add_task(name)
+
+    def update_task_status(self, task_name: str, status: str,
+                           progress: int = 0, run_time: str = ""):
+        item = self._items.get(task_name)
+        if item is None:
+            return
+        text = _status_text(status)
+        if run_time and status in ("completed", "failed", "stopped"):
+            text += f" ({run_time})"
+        item.setText(1, text)
+        item.setForeground(1, _status_color(status))
+
+    def set_busy(self, busy: bool):
+        """Grey out the Run Selected button while tasks are running so the
+        user cannot start the same tasks twice."""
+        self._run_btn.setEnabled(not busy and bool(self._items))
+
+    # ---- Internal ----
+
+    def _on_run(self):
+        names = []
+        for name, item in self._items.items():
+            if item.checkState(0) == Qt.CheckState.Checked:
+                names.append(name)
+        if names:
+            self.run_selected.emit(names)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Equalize once the initial layout has settled (header width known).
+        QTimer.singleShot(0, self._equalize_columns)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_tree"):
+            self._equalize_columns()
+
+    def _equalize_columns(self):
+        """Keep the Task / Status columns at exactly equal widths."""
+        header = self._tree.header()
+        total = header.width()
+        if total <= 0:
+            return
+        half = total // 2
+        header.resizeSection(0, half)
+        header.resizeSection(1, total - half)
+
+    def set_dark_theme(self, dark: bool):
+        self._dark = dark
+        self._apply_theme(dark)
+
+    def _apply_theme(self, dark: bool):
+        self.setStyleSheet(_styles(dark))
+
+
+class TaskMonitorDialog(QDialog):
+    """Task monitor (Idle/status toolbar button): one row per task with
+    checkbox + name + status, a progress bar while running, and a per-row
+    cancel button. "Run Selected" and "Stop All" sit at the top right.
+    """
+
+    run_selected = pyqtSignal(list)   # names of the selected tasks
+    stop_all = pyqtSignal()
+    cancel_task = pyqtSignal(str)     # single-task cancel
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._dark = False
+        self._rows: dict[str, _TaskRowWidget] = {}
+
+        # Same aspect as the main window (1400x900), i.e. width:height ~ 3:2.
+        self.setWindowTitle("Task Monitor")
+        self.setMinimumSize(560, 360)
+        self.resize(700, 450)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self.setModal(False)
+        self.setWindowFlags(
+            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint)
+        self._setup_ui()
+        self._apply_theme(False)
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        bar = QHBoxLayout()
+        bar.addStretch()
+        self._run_btn = QPushButton("Run Selected")
+        self._run_btn.clicked.connect(self._on_run)
+        bar.addWidget(self._run_btn)
+        self._stop_btn = QPushButton("Stop All")
+        self._stop_btn.setEnabled(False)
         self._stop_btn.clicked.connect(self.stop_all.emit)
-        control_bar.addWidget(self._stop_btn)
-        layout.addLayout(control_bar)
+        bar.addWidget(self._stop_btn)
+        layout.addLayout(bar)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._task_container = QWidget()
-        self._task_layout = QVBoxLayout(self._task_container)
-        self._task_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._task_layout.setSpacing(6)
-        scroll.setWidget(self._task_container)
-        layout.addWidget(scroll)
+        self._container = QWidget()
+        self._rows_layout = QVBoxLayout(self._container)
+        self._rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._rows_layout.setSpacing(6)
+        scroll.setWidget(self._container)
+        layout.addWidget(scroll, 1)
 
-        summary = QHBoxLayout()
-        self._summary_label = QLabel("No tasks added")
-        self._summary_label.setStyleSheet(
-            "font-size: 11px; color: #6c7086;")
-        summary.addWidget(self._summary_label)
-        summary.addStretch()
-        layout.addLayout(summary)
+        self._summary = QLabel("No tasks")
+        self._summary.setStyleSheet("font-size: 11px; color: #6c7086;")
+        layout.addWidget(self._summary)
 
-        log_group = QGroupBox("Run Log")
-        log_layout = QVBoxLayout(log_group)
-        self._log_text = QTextEdit()
-        self._log_text.setReadOnly(True)
-        self._log_text.setMaximumHeight(120)
-        self._log_text.setFont(QFont("Consolas", 10))
-        log_layout.addWidget(self._log_text)
-        layout.addWidget(log_group)
-
-    # ---- Task Management ----
+    # ---- Task management ----
 
     def add_task(self, task_name: str):
-        if task_name in self._task_widgets:
+        if task_name in self._rows:
             return
-        w = _TaskProgressWidget(task_name)
-        w.set_dark_theme(self._dark)
-        self._task_widgets[task_name] = w
-        self._task_layout.addWidget(w)
+        w = _TaskRowWidget(task_name, self._dark)
+        w.cancel_requested.connect(self.cancel_task.emit)
+        self._rows[task_name] = w
+        self._rows_layout.addWidget(w)
         self._update_summary()
 
     def sync_tasks(self, names: list):
-        """Sync the task list: drop deleted ones, add new ones (tasks are
-        managed from the project tree context menu)."""
-        for name in list(self._task_widgets):
+        for name in list(self._rows):
             if name not in names:
-                w = self._task_widgets.pop(name)
-                self._task_layout.removeWidget(w)
+                w = self._rows.pop(name)
+                self._rows_layout.removeWidget(w)
                 w.deleteLater()
         for name in names:
             self.add_task(name)
@@ -204,98 +398,41 @@ class RunMonitorDialog(QDialog):
 
     def update_task_status(self, task_name: str, status: str,
                            progress: int = 0, run_time: str = ""):
-        if task_name in self._task_widgets:
-            self._task_widgets[task_name].set_status(
-                status, progress, run_time)
+        w = self._rows.get(task_name)
+        if w is not None:
+            w.set_status(status, progress, run_time)
+        active = self._any_active()
+        self._stop_btn.setEnabled(active)
+        self._run_btn.setEnabled(not active)
 
-    def append_log(self, message: str):
-        self._log_text.append(message)
-        scrollbar = self._log_text.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+    def _any_active(self) -> bool:
+        for w in self._rows.values():
+            if w._cancel_btn.isEnabled():
+                return True
+        return False
+
+    def set_busy(self, busy: bool):
+        self._run_btn.setEnabled(not busy)
+        self._stop_btn.setEnabled(busy)
 
     # ---- Internal ----
 
-    def _on_select_all(self, state: int):
-        checked = state == Qt.CheckState.Checked.value
-        for w in self._task_widgets.values():
-            w._checkbox.setChecked(checked)
-
     def _on_run(self):
-        selected = [name for name, w in self._task_widgets.items()
-                    if w.is_selected()]
-        if selected:
-            self.run_selected.emit(selected)
+        names = [name for name, w in self._rows.items() if w.is_selected()]
+        if names:
+            self.run_selected.emit(names)
 
     def _update_summary(self):
-        n = len(self._task_widgets)
-        self._summary_label.setText(
-            f"{n} task(s) added" if n else "No tasks added")
+        n = len(self._rows)
+        self._summary.setText(f"{n} task(s)" if n else "No tasks")
 
     # ---- Theme ----
 
     def set_dark_theme(self, dark: bool):
         self._dark = dark
-        for w in self._task_widgets.values():
+        for w in self._rows.values():
             w.set_dark_theme(dark)
-        if dark:
-            self.setStyleSheet("""
-                QDialog { background-color: #1e1e2e; }
-                QLabel { color: #cdd6f4; font-size: 12px; }
-                QCheckBox { color: #cdd6f4; font-size: 12px; }
-                QGroupBox {
-                    color: #cdd6f4; font-weight: bold;
-                    border: 1px solid #45475a; border-radius: 6px;
-                    margin-top: 12px; padding: 16px 8px 8px 8px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin; padding: 2px 8px;
-                    color: #89b4fa;
-                }
-                QTextEdit {
-                    background-color: #11111b; color: #a6adc8;
-                    border: 1px solid #45475a; border-radius: 4px;
-                    font-size: 11px;
-                }
-                QPushButton {
-                    background-color: #313244; color: #cdd6f4;
-                    border: 1px solid #45475a; border-radius: 6px;
-                    padding: 6px 18px; font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: #45475a; border: 1px solid #89b4fa;
-                }
-                QScrollBar:vertical { background-color: #1e1e2e; width: 8px; }
-                QScrollBar::handle:vertical {
-                    background-color: #45475a; border-radius: 4px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QDialog { background-color: #f5f5f5; }
-                QLabel { color: #2c2c2c; font-size: 12px; }
-                QCheckBox { color: #2c2c2c; font-size: 12px; }
-                QGroupBox {
-                    color: #2c2c2c; font-weight: bold;
-                    border: 1px solid #d0d0d0; border-radius: 6px;
-                    margin-top: 12px; padding: 16px 8px 8px 8px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin; padding: 2px 8px;
-                    color: #2c2c2c;
-                }
-                QTextEdit {
-                    background-color: #ffffff; color: #2c2c2c;
-                    border: 1px solid #d0d0d0; border-radius: 4px;
-                    font-size: 11px;
-                }
-                QPushButton {
-                    background-color: #f0f0f0; color: #2c2c2c;
-                    border: 1px solid #d0d0d0; border-radius: 6px;
-                    padding: 6px 18px; font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: #e4e7eb; border: 1px solid #0078d4;
-                }
-                QScrollBar:vertical { background-color: #f0f0f0; width: 8px; }
-                QScrollBar::handle:vertical { background-color: #c0c0c0; border-radius: 4px; }
-            """)
+        self._apply_theme(dark)
+
+    def _apply_theme(self, dark: bool):
+        self.setStyleSheet(_styles(dark))

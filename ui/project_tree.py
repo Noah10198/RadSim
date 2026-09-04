@@ -1,5 +1,5 @@
 """
-ProjectTreeWidget - the 3dRad project tree
+ProjectTreeWidget - the RadSim project tree
 
 Structure (matches GUI_Design.md section 2 and the tree conventions):
   Project
@@ -51,7 +51,7 @@ CTX_RESULT = "result"        # result item
 
 
 class ProjectTreeWidget(QWidget):
-    """3dRad Project Tree - Geometry / Tasks, two-level roots."""
+    """RadSim Project Tree - Geometry / Tasks, two-level roots."""
 
     node_selected = pyqtSignal(str)               # a GDML node was selected (entry_id)
     visibility_changed = pyqtSignal(str, bool)    # GDML checkbox toggled visibility
@@ -370,6 +370,19 @@ class ProjectTreeWidget(QWidget):
             if ai.text(0) == kind:
                 fg = QColor("#2e7d32") if configured else QColor("#888888")
                 ai.setForeground(0, fg)
+                break
+
+    def set_particle_configured(self, task_name: str, configured: bool):
+        """Mark the task's "Particle Setting" child as configured (green)."""
+        item = self._find_task_item(task_name)
+        if item is None:
+            return
+        for i in range(item.childCount()):
+            child = item.child(i)
+            act = child.data(0, TASK_ACTION_ROLE) or ""
+            if act.startswith("particle:"):
+                fg = QColor("#2e7d32") if configured else QColor("#888888")
+                child.setForeground(0, fg)
                 break
 
     def clear_tasks(self):

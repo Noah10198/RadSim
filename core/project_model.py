@@ -1,7 +1,7 @@
 """
-project_model - 3dRad run task data model
+project_model - RadSim run task data model
 
-Modeled on 1dRad's TaskData and trimmed for 3dRad semantics:
+Modeled on 1dRad's TaskData and trimmed for RadSim semantics:
   - a task = GDML geometry + analysis type (realworld / probe / voxel)
     + run status
   - when particle sources / physics processes / mesh parameters are

@@ -17,6 +17,8 @@ from pathlib import Path
 from .gdml_tree import GdmlNode, GdmlNodeType, Placement
 from .gdml_parser import GdmIParser
 from .gdml_evaluator import GdmIEvaluator
+from .collision_detector import compute_world_transform
+from vtkmodules.vtkCommonTransforms import vtkTransform
 
 
 class GdmlAgent:
@@ -224,72 +226,169 @@ class GdmlAgent:
 
     # ---- BBox & World operations ----
 
+    # ---- Bounding boxes (world-frame, rotation-aware) ----
+    #
+    # The union of the *rendered instances* (VOLUME_NODEs cloned under a
+    # physvol that belongs to the WORLD subtree - the same set VtkScene
+    # builds actors for) is the true "geometry extent". LogicalVolumeStore
+    # definitions are NOT physical geometry and are therefore excluded, as
+    # is the world container itself. Each instance is boxed with its local
+    # AABB (per solid type) transformed by the full parent-chain placement
+    # (translation + Euler rotation), so rotated / tessellated / repeated
+    # volumes are enclosed correctly.
+
     def compute_scene_bbox(self) -> Tuple[float, float, float, float, float, float]:
+        """Union AABB of every physically placed volume (world excluded).
+
+        Returns (xmin, xmax, ymin, ymax, zmin, zmax), or all zeros when no
+        geometry exists.
         """
-        Compute global axis-aligned bounding box of all renderable volumes.
-
-        Returns:
-            (xmin, xmax, ymin, ymax, zmin, zmax)
-            Returns (0,0,0,0,0,0) if no volumes exist
-        """
-        xmin = ymin = zmin = float('inf')
-        xmax = ymax = zmax = float('-inf')
-        found = False
-
-        for vol in self.get_all_renderable_volumes():
-            if not vol.solid_params:
-                continue
-            # Half-size
-            hx = vol.solid_params.get('x', 0) / 2.0
-            hy = vol.solid_params.get('y', 0) / 2.0
-            hz = vol.solid_params.get('z', 0) / 2.0
-
-            # Accumulate global position from parent chain
-            tx, ty, tz = self._compute_global_position(vol)
-            lxmin, lxmax = tx - hx, tx + hx
-            lymin, lymax = ty - hy, ty + hy
-            lzmin, lzmax = tz - hz, tz + hz
-
-            if lxmin < xmin: xmin = lxmin
-            if lxmax > xmax: xmax = lxmax
-            if lymin < ymin: ymin = lymin
-            if lymax > ymax: ymax = lymax
-            if lzmin < zmin: zmin = lzmin
-            if lzmax > zmax: zmax = lzmax
-            found = True
-
-        if not found:
+        boxes = [b for b in (self._world_aabb(n)
+                             for n in self._iter_renderable_instances())
+                 if b is not None]
+        if not boxes:
             return (0, 0, 0, 0, 0, 0)
-        return (xmin, xmax, ymin, ymax, zmin, zmax)
+        return (min(b[0] for b in boxes), max(b[1] for b in boxes),
+                min(b[2] for b in boxes), max(b[3] for b in boxes),
+                min(b[4] for b in boxes), max(b[5] for b in boxes))
 
-    def _compute_global_position(self, node: GdmlNode) -> Tuple[float, float, float]:
-        """
-        Walk up parent chain, accumulating:
-        - PHYVOL_NODE placements (per-physvol positioning, with override support)
-        - GDML_FILE file_transform (file-level translate/rotate)
+    def get_renderable_volume_names(self) -> List[str]:
+        """Distinct logical-volume names that are physically placed under a
+        world (one entry per logical volume, not per instance)."""
+        seen: List[str] = []
+        for inst in self._iter_renderable_instances():
+            n = inst.name
+            if n and n not in seen:
+                seen.append(n)
+        return seen
 
-        Note: placement overrides from Transform dialog must be accounted for,
-        otherwise bbox will use original (pre-transform) positions.
+    def compute_volume_bbox(self, name: str
+                            ) -> Tuple[float, float, float, float, float, float]:
+        """Union AABB of all physical instances of one logical volume."""
+        boxes = [b for n in self._iter_renderable_instances()
+                 if n.name == name
+                 for b in (self._world_aabb(n),) if b is not None]
+        if not boxes:
+            return (0, 0, 0, 0, 0, 0)
+        return (min(b[0] for b in boxes), max(b[1] for b in boxes),
+                min(b[2] for b in boxes), max(b[3] for b in boxes),
+                min(b[4] for b in boxes), max(b[5] for b in boxes))
+
+    # ---- Internals ----
+
+    def _iter_renderable_instances(self):
+        """Yield every volume node that VtkScene renders in normal mode
+        (render_all_volumes=False): instance clones under the world subtree."""
+        for file_node in self.get_all_file_nodes():
+            yield from self._walk_instances(file_node, False)
+
+    def _walk_instances(self, node: GdmlNode, under_world: bool):
+        uw = under_world or node.node_type == GdmlNodeType.WORLD_NODE
+        if (uw and node.node_type == GdmlNodeType.VOLUME_NODE
+                and node.parent
+                and node.parent.node_type == GdmlNodeType.PHYVOL_NODE
+                and node.solid_params):
+            yield node
+        for child in node.children:
+            yield from self._walk_instances(child, uw)
+
+    @staticmethod
+    def _local_aabb(node: GdmlNode) -> Optional[Tuple[float, float, float,
+                                                      float, float, float]]:
+        """Exact local AABB (xmin, xmax, ymin, ymax, zmin, zmax) of the
+        solid in the volume's own frame — matches VtkSolidFactory rendering.
+        None for solids that are not renderable (contribute nothing)."""
+        p = node.solid_params or {}
+        tag = node.gdml_tag
+        if tag == "box":
+            x, y, z = (p.get("x", 0) / 2, p.get("y", 0) / 2, p.get("z", 0) / 2)
+            return (-x, x, -y, y, -z, z)
+        if tag in ("sphere", "orb"):
+            r = p.get("rmax", 0.0)
+            return (-r, r, -r, r, -r, r)
+        if tag in ("tube", "tubs"):
+            r, z = p.get("rmax", 0.0), p.get("z", 0.0) / 2
+            return (-r, r, -r, r, -z, z)
+        if tag in ("cone", "cons"):
+            r = max(p.get("rmax1", 0.0), p.get("rmax2", 0.0))
+            z = p.get("z", 0.0) / 2
+            return (-r, r, -r, r, -z, z)
+        if tag == "torus":
+            r = p.get("rtor", 0.0) + p.get("rmax", 0.0)
+            z = p.get("rmax", 0.0)
+            return (-r, r, -r, r, -z, z)
+        if tag == "ellipsoid":
+            ax, by, cz = p.get("ax", 0.0), p.get("by", 0.0), p.get("cz", 0.0)
+            return (-ax, ax, -by, by, -cz, cz)
+        if tag in ("polycone", "genericPolycone"):
+            planes = p.get("zplanes") or []
+            if not planes:
+                return (0, 0, 0, 0, 0, 0)
+            r = max(max(zp.get("rmax", 0.0), zp.get("rmin", 0.0))
+                    for zp in planes)
+            zs = [zp["z"] for zp in planes]
+            return (-r, r, -r, r, min(zs), max(zs))
+        if tag == "tessellated":
+            verts = p.get("vertices") or {}
+            if not verts:
+                return (0, 0, 0, 0, 0, 0)
+            xs = [v[0] for v in verts.values()]
+            ys = [v[1] for v in verts.values()]
+            zs = [v[2] for v in verts.values()]
+            return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
+        return None
+
+    def _override_provider(self, entry_id: str) -> Optional[Placement]:
+        return self._placement_overrides.get(entry_id)
+
+    def _world_aabb(self, node: GdmlNode):
+        """World-frame AABB of a single placed volume instance."""
+        lb = self._local_aabb(node)
+        if lb is None:
+            return None
+        tx, ty, tz, rx, ry, rz = compute_world_transform(
+            node, self._override_provider)
+        corners = [
+            (lb[0], lb[2], lb[4]), (lb[1], lb[2], lb[4]),
+            (lb[0], lb[3], lb[4]), (lb[1], lb[3], lb[4]),
+            (lb[0], lb[2], lb[5]), (lb[1], lb[2], lb[5]),
+            (lb[0], lb[3], lb[5]), (lb[1], lb[3], lb[5]),
+        ]
+        if abs(rx) < 1e-9 and abs(ry) < 1e-9 and abs(rz) < 1e-9:
+            xs = [c[0] + tx for c in corners]
+            ys = [c[1] + ty for c in corners]
+            zs = [c[2] + tz for c in corners]
+            return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
+        # Same passive-Euler -> VTK active-order mapping as the renderer:
+        # SetOrientation(-rx, -ry, -rz) == Translate -> RotateZ(-rz) ->
+        # RotateX(-ry) -> RotateY(-rx).
+        t = vtkTransform()
+        t.Translate(tx, ty, tz)
+        t.RotateZ(-rz)
+        t.RotateX(-ry)
+        t.RotateY(-rx)
+        xs, ys, zs = [], [], []
+        for cx, cy, cz in corners:
+            wx, wy, wz = t.TransformPoint(cx, cy, cz)
+            xs.append(wx); ys.append(wy); zs.append(wz)
+        return (min(xs), max(xs), min(ys), max(ys), min(zs), max(zs))
+
+    def compute_world_bbox(self) -> Optional[Tuple[float, float, float,
+                                                   float, float, float]]:
+        """Union of the world-frame AABBs of every world container.
+
+        Unlike compute_scene_bbox (which excludes the world container), this
+        returns the world box itself, so callers can validate e.g. particle
+        source placement against the world. Returns None when no geometry /
+        no world node exists.
         """
-        tx = ty = tz = 0.0
-        cur = node.parent
-        while cur is not None:
-            if cur.node_type == GdmlNodeType.PHYVOL_NODE:
-                # Start from original GDML placement, then check for override
-                p = cur.placement
-                if cur.entry_id and cur.entry_id in self._placement_overrides:
-                    p = self._placement_overrides[cur.entry_id]
-                if p is not None:
-                    tx += p.x
-                    ty += p.y
-                    tz += p.z
-            elif cur.node_type == GdmlNodeType.GDML_FILE and cur.file_transform:
-                ft = cur.file_transform
-                tx += ft.x
-                ty += ft.y
-                tz += ft.z
-            cur = cur.parent
-        return (tx, ty, tz)
+        boxes = [b for n in self.get_world_nodes()
+                 for b in (self._world_aabb(n),) if b is not None]
+        if not boxes:
+            return None
+        return (min(b[0] for b in boxes), max(b[1] for b in boxes),
+                min(b[2] for b in boxes), max(b[3] for b in boxes),
+                min(b[4] for b in boxes), max(b[5] for b in boxes))
 
     def get_world_nodes(self) -> List[GdmlNode]:
         """Get all WORlD_NODE nodes"""

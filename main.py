@@ -1,5 +1,5 @@
 """
-3dRad - 3D Radiation Simulation GUI
+RadSim - 3D Radiation Simulation GUI
 
 Provides a graphical front-end for the rad4space solver: GDML geometry
 rendering plus configuration and result display for three analysis modes
@@ -24,21 +24,41 @@ except Exception:
     pass
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import qInstallMessageHandler, QtMsgType, QMessageLogContext
 
 from app.main_window import MainWindow
 from utils.logger import AsyncLogger
 
 
+def _qt_message_filter(_msg_type: QtMsgType, _context: QMessageLogContext,
+                       message: str) -> None:
+    """Silence benign Qt platform noise on Windows.
+
+    Qt tries to give native title bars a dark border when a window's
+    background is dark (preview windows / dark theme). On Windows builds
+    where DwmSetWindowAttribute is unavailable or called before the native
+    window exists it prints, per window/attempt:
+      QWindowsWindow::setDarkBorderToWindow: Unable to set dark window border.
+    It is cosmetic noise - the OS simply falls back to the normal border -
+    so the line is dropped. Everything else is forwarded to stderr.
+    """
+    text = str(message)
+    if "setDarkBorderToWindow" in text:
+        return
+    print(f"Qt: {text}", file=sys.stderr)
+
+
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("3dRad")
+    app.setApplicationName("RadSim")
     app.setApplicationVersion("0.1.0")
+    _ = qInstallMessageHandler(_qt_message_filter)
 
     main_window = MainWindow()
 
     logger = AsyncLogger()
     logger.set_system_log_widget(main_window.get_system_log_widget())
-    logger.log_system("3dRad started")
+    logger.log_system("RadSim started")
     logger.log_system(f"Python version: {sys.version}")
 
     main_window.show()

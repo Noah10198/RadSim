@@ -1,5 +1,5 @@
 """
-RunManager - 3dRad multi-task run manager
+RunManager - RadSim multi-task run manager
 
 Refactored on top of 1dRad's QTimer-based simulation, with the multi-task
 mechanism prepared up front:
@@ -68,6 +68,21 @@ class RunManager(QObject):
             if task:
                 task.status = "stopped"
             self._queue.remove(name)
+            self.task_finished.emit(name, "stopped")
+        if not self.is_running_any():
+            self.all_finished.emit()
+
+    def stop_task(self, name: str) -> None:
+        """Cancel a single task (running or queued). Used by the per-row
+        cancel button of the task monitor."""
+        if name in self._running:
+            self._stop_task(name, "stopped")
+            self._pump()
+        elif name in self._queue:
+            self._queue.remove(name)
+            task = self._tasks.get(name)
+            if task:
+                task.status = "stopped"
             self.task_finished.emit(name, "stopped")
         if not self.is_running_any():
             self.all_finished.emit()

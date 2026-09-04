@@ -1,10 +1,11 @@
 """
-RibbonToolBar - 3dRad Ribbon Toolbar
+RibbonToolBar - RadSim Ribbon Toolbar
 
 Menu order (as agreed with the user; icon style matches 1dRad/gdmleditor):
   📁 Import GDML │ 🧾 Load Project │ 💾 Save Project ┃
-  🎯 Reset View │ ▶️ Run │ ⏹ Stop ┃
-  🟢 Status (status indicator, click to show calculation progress) │ 🌙/☀️ Theme │ ❓ Help
+  🎯 Reset View ┃
+  ▶️ Run │ 🟢 Idle (status indicator) │ ⏹ Stop ┃
+  ⚙️ Solver Setting │ 🌙/☀️ Theme │ ❓ Help
 """
 
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QToolButton, QSizePolicy, QFrame
@@ -46,7 +47,7 @@ def _ribbon_button(emoji: str, text: str) -> QToolButton:
 
 
 class RibbonToolBar(QWidget):
-    """3dRad Ribbon: File / View / Run / Status / Theme / Help"""
+    """RadSim Ribbon: File / View / Run-Idle-Stop / Solver / Theme / Help"""
 
     import_clicked = pyqtSignal()
     load_clicked = pyqtSignal()
@@ -55,6 +56,7 @@ class RibbonToolBar(QWidget):
     run_clicked = pyqtSignal()
     stop_clicked = pyqtSignal()
     status_clicked = pyqtSignal()
+    solver_setting_clicked = pyqtSignal()
     theme_toggled = pyqtSignal()
     help_clicked = pyqtSignal()
 
@@ -96,15 +98,26 @@ class RibbonToolBar(QWidget):
 
         layout.addWidget(self._sep())
 
-        # -- View / Run group --
+        # -- View group --
         reset_btn = _ribbon_button("🎯", "Reset View")
         reset_btn.clicked.connect(self.reset_view_clicked.emit)
         layout.addWidget(reset_btn)
 
+        layout.addWidget(self._sep())
+
+        # -- Run group: Run / Idle (status) / Stop, in that order --
         self._run_btn = _ribbon_button("▶️", "Run")
         self._run_btn.setObjectName("RunButton")
+        self._run_btn.setToolTip("Open the run launcher (pick tasks and start)")
         self._run_btn.clicked.connect(self.run_clicked.emit)
         layout.addWidget(self._run_btn)
+
+        self._status_btn = _ribbon_button("🟢", "Idle")
+        self._status_btn.setObjectName("StatusButton")
+        self._status_btn.setToolTip(
+            "Show task monitor with progress bars (idle / running / issues / done)")
+        self._status_btn.clicked.connect(self.status_clicked.emit)
+        layout.addWidget(self._status_btn)
 
         self._stop_btn = _ribbon_button("⏹", "Stop")
         self._stop_btn.setObjectName("StopButton")
@@ -114,13 +127,12 @@ class RibbonToolBar(QWidget):
 
         layout.addWidget(self._sep())
 
-        # -- Status indicator (click to show calculation progress) --
-        self._status_btn = _ribbon_button("🟢", "Idle")
-        self._status_btn.setObjectName("StatusButton")
-        self._status_btn.setToolTip(
-            "Show task calculation status (running / issues / done)")
-        self._status_btn.clicked.connect(self.status_clicked.emit)
-        layout.addWidget(self._status_btn)
+        # -- Solver setting (path to the rad4space executable) --
+        self._solver_btn = _ribbon_button("⚙️", "Solver Setting")
+        self._solver_btn.setObjectName("SolverSettingButton")
+        self._solver_btn.setToolTip("Set the path of the solver executable")
+        self._solver_btn.clicked.connect(self.solver_setting_clicked.emit)
+        layout.addWidget(self._solver_btn)
 
         layout.addStretch()
 

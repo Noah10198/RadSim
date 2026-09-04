@@ -1,6 +1,6 @@
 """
-VoxelDialog - voxel analysis configuration (3D grid preview on the left,
-form on the right)
+VoxelDialog - voxel analysis configuration (form on the left, 3D grid preview
+on the right)
 
 Follows doc/GUI_Design.md section 6:
   Type Box; extent all_geo / manual; nBin xyz; quantity (no energy spectrum).
@@ -11,11 +11,12 @@ configuring; the 3D view is built lazily.
 """
 
 import math
+import os
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSplitter, QRadioButton, QButtonGroup, QSpinBox, QDoubleSpinBox,
-    QGroupBox, QGridLayout, QWidget,
+    QGroupBox, QGridLayout, QWidget, QComboBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 
@@ -28,7 +29,7 @@ from vtkmodules.vtkFiltersSources import vtkCubeSource
 
 from ui.vtk_widget import VtkPreviewWidget
 from ui.dialogs.analysis_common import (
-    QuantityListPanel, DIALOG_STYLE,
+    QuantityListPanel, DIALOG_STYLE, fit_size_to_screen,
 )
 
 
@@ -65,24 +66,21 @@ class VoxelDialog(QDialog):
         # Same default size as the probe dialog, forced back after the first
         # show (on first activation the layout shrinks the window to its
         # sizeHint, overriding the resize done before build_ui)
-        self._default_size = (1080, 680)
+        self._default_size = (1120, 700)
         self._size_applied = False
 
         # Lazy 3D: build the scene only after the window is really mapped
         # (showEvent)
         self._preview_built = False
+        self._closed = False
 
     def showEvent(self, event):
         super().showEvent(event)
         if not self._preview_built and self.isVisible():
             self._preview_built = True
-            QTimer.singleShot(0, self._build_preview)
-        # Restore the default size after the first show (the window is mapped
-        # now, so the layout will not shrink again)
-        if not getattr(self, "_size_applied", False) and self.isVisible():
-            self._size_applied = True
-            QTimer.singleShot(
-                0, lambda: self.resize(*self._default_size))
+            # Create the VTK widget only after the dialog is really mapped
+            # (see _ensure_preview) - never during __init__/build_ui.
+            QTimer.singleShot(0, self._ensure_preview)
 
     # -- Data --
 
@@ -113,79 +111,166 @@ class VoxelDialog(QDialog):
 
         split = QSplitter(Qt.Orientation.Horizontal)
         split.setChildrenCollapsible(False)
+        self._split = split
 
-        # Left: 3D preview
-        self._preview = VtkPreviewWidget()
-        split.addWidget(self._preview)
+        # ---- Left: form (extent mode / grid density / quantity) ----
+        form = QWidget()
+        fv = QVBoxLayout(form)
+        fv.setContentsMargins(0, 0, 4, 0)
+        fv.setSpacing(6)
 
-        # Right: form
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(4, 0, 0, 0)
-        rv.setSpacing(8)
-
-        # Extent mode
-        mode_box = QGroupBox("Range")
+        # Extent mode - three mutually exclusive options. Only one voxel box
+        # is ever displayed; switching modes rebuilds it from scratch (the
+        # previous actors are removed first, see _rebuild_mesh).
+        mode_box = QGroupBox("Voxel extent")
         mv = QVBoxLayout(mode_box)
+        mv.setSpacing(6)
         self._mode_group = QButtonGroup(self)
-        self._radio_all = QRadioButton("Enclose all geometry (excluding the world volume)")
-        self._radio_all.toggled.connect(self._on_mode_changed)
-        self._radio_manual = QRadioButton("Manual (half-size + offset)")
-        self._radio_manual.toggled.connect(self._on_mode_changed)
-        self._mode_group.addButton(self._radio_all)
-        self._mode_group.addButton(self._radio_manual)
-        mv.addWidget(self._radio_all)
-        mv.addWidget(self._radio_manual)
-        rv.addWidget(mode_box)
 
-        # Half-size / center / nBin
-        grid = QGridLayout()
-        grid.setSpacing(6)
+        self._radio_all = QRadioButton(
+            "Enclose all geometry (auto bounding box, world excluded)")
+        self._radio_all.toggled.connect(self._on_mode_changed)
+        mv.addWidget(self._radio_all)
+
+        self._radio_volume = QRadioButton(
+            "Bounding box of a selected volume")
+        self._radio_volume.toggled.connect(self._on_mode_changed)
+        mv.addWidget(self._radio_volume)
+
+        # Volume picker (visible only in volume mode)
+        self._vol_row = QWidget()
+        vr = QHBoxLayout(self._vol_row)
+        vr.setContentsMargins(0, 0, 0, 0)
+        vr.setSpacing(6)
+        vr.addSpacing(22)
+        vr.addWidget(QLabel("Volume:"))
+        self._vol_cb = QComboBox()
+        self._vol_cb.currentIndexChanged.connect(self._on_volume_changed)
+        vr.addWidget(self._vol_cb, 1)
+        mv.addWidget(self._vol_row)
+
+        self._radio_manual = QRadioButton(
+            "Manual (type half-size and offset yourself)")
+        self._radio_manual.toggled.connect(self._on_mode_changed)
+        mv.addWidget(self._radio_manual)
+
+        self._mode_group.addButton(self._radio_all)
+        self._mode_group.addButton(self._radio_volume)
+        self._mode_group.addButton(self._radio_manual)
+
+        # Auto-extent summary (all_geo / volume mode)
+        self._auto_label = QLabel("")
+        self._auto_label.setWordWrap(True)
+        self._auto_label.setStyleSheet("color: #888888; font-size: 11px;")
+        mv.addWidget(self._auto_label)
+
+        # Manual half-size / center inputs (only in manual mode)
+        self._manual_widget = QWidget()
+        mg = QGridLayout(self._manual_widget)
+        mg.setSpacing(6)
+        mg.addWidget(QLabel(""), 0, 0)
+        for axis in range(3):
+            mg.addWidget(QLabel(("X", "Y", "Z")[axis]), 0, axis + 1)
+        mg.addWidget(QLabel("Half-size:"), 1, 0)
         self._half_spins = []
-        self._nbin_spins = []
-        self._center_spins = []
-        for axis, label in enumerate(("X", "Y", "Z")):
-            grid.addWidget(QLabel(f"{label} half-size:"), 0, axis * 2)
+        for axis in range(3):
             s = QDoubleSpinBox()
             s.setRange(0.01, 1e5)
             s.setDecimals(2)
+            s.setSuffix(" mm")
+            s.setSingleStep(5.0)
+            s.setValue(30.0)
             s.valueChanged.connect(self._schedule_rebuild)
             self._half_spins.append(s)
-            grid.addWidget(s, 0, axis * 2 + 1)
-
-            grid.addWidget(QLabel(f"{label} center:"), 1, axis * 2)
+            mg.addWidget(s, 1, axis + 1)
+        mg.addWidget(QLabel("Center:"), 2, 0)
+        self._center_spins = []
+        for axis in range(3):
             c = QDoubleSpinBox()
             c.setRange(-1e6, 1e6)
             c.setDecimals(2)
+            c.setSuffix(" mm")
+            c.setSingleStep(5.0)
+            c.setValue(0.0)
             c.valueChanged.connect(self._schedule_rebuild)
             self._center_spins.append(c)
-            grid.addWidget(c, 1, axis * 2 + 1)
+            mg.addWidget(c, 2, axis + 1)
+        mv.addWidget(self._manual_widget)
 
-            grid.addWidget(QLabel(f"{label} nBin:"), 2, axis * 2)
+        # nBin stays visible in every mode (the grid density is always needed)
+        nb = QHBoxLayout()
+        nb.setSpacing(6)
+        nb.addWidget(QLabel("Cells per axis (nBin):"))
+        self._nbin_spins = []
+        for axis in range(3):
             n = QSpinBox()
             n.setRange(1, 512)
+            n.setValue(10)
             n.valueChanged.connect(self._schedule_rebuild)
             self._nbin_spins.append(n)
-            grid.addWidget(n, 2, axis * 2 + 1)
-        rv.addLayout(grid)
+            nb.addWidget(n)
+            nb.addSpacing(4)
+        nb.addStretch()
+        mv.addLayout(nb)
+        fv.addWidget(mode_box)
 
         self._density_label = QLabel("")
         self._density_label.setStyleSheet(
             "color: #888888; font-size: 11px;")
-        rv.addWidget(self._density_label)
+        fv.addWidget(self._density_label)
 
-        auto_btn = QPushButton("🔄 Recompute bounding box of all geometry")
-        auto_btn.clicked.connect(self._apply_auto_bbox)
-        rv.addWidget(auto_btn)
+        # Elastic quantity list: it stretches with the left column so its
+        # bottom edge lines up with the 3D preview on the right (no dead gap
+        # under the rows). The empty remainder is transparent, so it does not
+        # show as a separate "box" in either theme.
+        self._q_panel = QuantityListPanel(stretchable=True,
+                                          scroll_min_height=150)
+        self._q_panel.changed.connect(self._apply_form_width)
+        fv.addWidget(self._q_panel, 1)
 
-        self._q_panel = QuantityListPanel()
-        rv.addWidget(self._q_panel, 1)
+        # Volume picker contents = logical volumes physically placed in world
+        if self._agent is not None:
+            names = self._agent.get_renderable_volume_names()
+            if names:
+                for nm in names:
+                    self._vol_cb.addItem(nm, nm)
+            else:
+                self._vol_cb.addItem("— (no placed volumes) —", None)
 
-        split.addWidget(right)
-        split.setSizes([560, 500])
-        # The 3D preview takes the stretch priority (keeps the form from
-        # squeezing it away)
-        split.setStretchFactor(0, 3)
+        split.addWidget(form)
+
+        # ---- Right: 3D preview column ----
+        # The VTK widget is intentionally NOT created here: the legacy
+        # QVTKRenderWindowInteractor forces a native window the moment it is
+        # constructed (winId() inside its __init__). Doing that while the
+        # dialog is still unmapped creates stray top-level native windows that
+        # are re-parented on first show, which on Windows prints
+        #   QWindowsWindow::setGeometry: Unable to set geometry ...
+        # and misplaces the QComboBox popups. It is also important NOT to let
+        # the preview become a direct child of the QSplitter while unmapped:
+        # QSplitterLayout would auto-insert it as an extra pane and the split
+        # would jump around once the placeholder is swapped. The widget is
+        # therefore created only after the dialog is mapped and sized, and is
+        # inserted into a plain QVBoxLayout (see _ensure_preview).
+        self._preview = None
+        self._preview_host = QWidget()
+        pv = QVBoxLayout(self._preview_host)
+        pv.setContentsMargins(4, 0, 0, 0)
+        pv.setSpacing(0)
+        self._preview_ph = QLabel("Initializing 3D view…")
+        self._preview_ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview_ph.setStyleSheet(
+            "border: 1px dashed #888888; color: #888888; font-size: 12px;")
+        self._preview_ph.setMinimumSize(280, 160)
+        pv.addWidget(self._preview_ph, 1)
+        self._pv_layout = pv
+        split.addWidget(self._preview_host)
+
+        # The 3D preview takes the stretch priority (keeps the form column at
+        # its content-driven width and sends any extra window width to the
+        # preview). The actual pane widths are set by _apply_form_width once
+        # the quantity rows are known.
+        split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         layout.addWidget(split, 1)
 
@@ -196,58 +281,141 @@ class VoxelDialog(QDialog):
         close_btn.clicked.connect(self.close)
         btns.addWidget(close_btn)
         save_btn = QPushButton("✅ Save config")
-        save_btn.setDefault(True)
         save_btn.clicked.connect(self._save)
         btns.addWidget(save_btn)
         layout.addLayout(btns)
+        # Enter must never trigger a button in this dialog (the forms are
+        # typed with the keyboard); saving happens only via a mouse click.
+        for _btn in self.findChildren(QPushButton):
+            _btn.setAutoDefault(False)
 
         # Load an existing configuration
-        self._radio_all.setChecked(self._cfg.get("mode") != "manual")
-        self._radio_manual.setChecked(self._cfg.get("mode") == "manual")
         for i in range(3):
             self._half_spins[i].setValue(self._cfg["half"][i])
             self._nbin_spins[i].setValue(self._cfg["nbin"][i])
             self._center_spins[i].setValue(self._cfg["center"][i])
         self._q_panel.set_quantities(self._cfg.get("qs", []))
-        self._update_mode_controls()
+
+        mode = self._cfg.get("mode", "all_geo")
+        if mode == "volume":
+            sel = self._cfg.get("selected", "") or ""
+            idx = self._vol_cb.findData(sel) if sel else -1
+            if idx >= 0:
+                self._vol_cb.setCurrentIndex(idx)
+            self._radio_volume.setChecked(True)
+        elif mode == "manual":
+            self._radio_manual.setChecked(True)
+        else:
+            self._radio_all.setChecked(True)
         self._update_density()
+        # Size the left column to the widest quantity row that was just loaded
+        # (real geometry widths are reapplied in _ensure_preview).
+        self._apply_form_width()
+
+    # -- Column widths / sizing --
+
+    def _form_col_width(self) -> int:
+        """Width the left column needs so the widest quantity row (name +
+        type + unit + particle filter + ✕) is fully visible - no horizontal
+        scroll bar. +38px reserves room for the vertical scroll bar that
+        appears once several rows overflow the panel."""
+        w = 0
+        for row in self._q_panel._rows:
+            w = max(w, row.sizeHint().width())
+        return max(560, w + 38)
+
+    def _apply_form_width(self):
+        if not getattr(self, "_split", None):
+            return  # splitter not built yet (early signal from panel rows)
+        left = self._form_col_width()
+        avail = self._split.width()
+        if avail > 0:
+            self._split.setSizes(
+                [min(left, max(320, avail - 380)),
+                 max(380, avail - left)])
+        else:
+            self._split.setSizes([left, left * 2])
 
     # -- Mode sync --
 
+    def _mode(self) -> str:
+        """all_geo | volume | manual"""
+        if self._radio_manual.isChecked():
+            return "manual"
+        if self._radio_volume.isChecked():
+            return "volume"
+        return "all_geo"
+
     def _on_mode_changed(self):
-        self._update_mode_controls()
-        if self._radio_all.isChecked():
-            self._apply_auto_bbox()
+        mode = self._mode()
+        self._vol_row.setVisible(mode == "volume")
+        self._manual_widget.setVisible(mode == "manual")
+        self._auto_label.setVisible(mode != "manual")
+        if mode == "all_geo":
+            bbox = (self._agent.compute_scene_bbox()
+                    if self._agent is not None else None)
+            self._refresh_auto_bbox(bbox)
+        elif mode == "volume":
+            name = self._vol_cb.currentData() or ""
+            bbox = (self._agent.compute_volume_bbox(name)
+                    if name and self._agent is not None else None)
+            self._refresh_auto_bbox(bbox, name)
         else:
-            self._schedule_rebuild()
-
-    def _update_mode_controls(self):
-        manual = self._radio_manual.isChecked()
-        for w in (*self._half_spins, *self._center_spins):
-            w.setEnabled(manual)
-
-    def _apply_auto_bbox(self):
-        bbox = self._agent.compute_scene_bbox()
-        if not bbox or all(abs(v) < 1e-9 for v in bbox):
-            return
-        xmin, xmax, ymin, ymax, zmin, zmax = bbox
-        half = [(xmax - xmin) / 2, (ymax - ymin) / 2, (zmax - zmin) / 2]
-        center = [(xmax + xmin) / 2, (ymax + ymin) / 2, (zmax + zmin) / 2]
-        for i in range(3):
-            self._half_spins[i].setValue(max(half[i], 0.01))
-            self._center_spins[i].setValue(center[i])
-        self._cfg["mode"] = "all_geo"
+            self._refresh_auto_bbox(None)
         self._schedule_rebuild()
+
+    def _on_volume_changed(self):
+        if self._mode() != "volume":
+            return
+        name = self._vol_cb.currentData() or ""
+        bbox = (self._agent.compute_volume_bbox(name)
+                if name and self._agent is not None else None)
+        self._refresh_auto_bbox(bbox, name)
+        self._schedule_rebuild()
+
+    def _refresh_auto_bbox(self, bbox, name: str = ""):
+        """Remember the derived box + refresh the summary line. The resolved
+        half-size/center is what gets persisted, so the CSV (index-only) can
+        later be mapped back to world coordinates even in auto modes."""
+        self._auto_bbox = None
+        if not bbox or all(abs(v) < 1e-9 for v in bbox):
+            self._auto_label.setText(
+                f"Volume “{name}” contributes no box." if name
+                else "No placed geometry found yet.")
+            return
+        self._auto_bbox = bbox
+        xmin, xmax, ymin, ymax, zmin, zmax = bbox
+        self._derived_half = [max((xmax - xmin) / 2, 0.01),
+                              max((ymax - ymin) / 2, 0.01),
+                              max((zmax - zmin) / 2, 0.01)]
+        self._derived_center = [(xmax + xmin) / 2,
+                                (ymax + ymin) / 2,
+                                (zmax + zmin) / 2]
+        head = f"Volume “{name}”" if name else "All geometry"
+        self._auto_label.setText(
+            f"{head}: X [{xmin:.2f}, {xmax:.2f}]  "
+            f"Y [{ymin:.2f}, {ymax:.2f}]  "
+            f"Z [{zmin:.2f}, {zmax:.2f}] mm\n"
+            f"Box: {(xmax - xmin):.2f} × {(ymax - ymin):.2f} × "
+            f"{(zmax - zmin):.2f} mm")
+
+    def _effective_box(self):
+        """(half, center) currently driving the mesh/preview. In auto modes
+        the derived box is used (manual inputs are hidden and irrelevant)."""
+        if self._mode() != "manual" and getattr(self, "_derived_half", None):
+            return (self._derived_half, self._derived_center)
+        return ([s.value() for s in self._half_spins],
+                [s.value() for s in self._center_spins])
 
     def _update_density(self):
         nx, ny, nz = (s.value() for s in self._nbin_spins)
         total = nx * ny * nz
-        half = [s.value() for s in self._half_spins]
+        half, _ = self._effective_box()
         cell = (2 * half[0] / nx) * (2 * half[1] / ny) * (2 * half[2] / nz)
         dens = "sparse/moderate" if max(nx, ny, nz) <= 25 else \
                "medium" if max(nx, ny, nz) <= 50 else "dense (>50^3, watch Geant4 memory)"
         self._density_label.setText(
-            f"total cells: {total:,}  per-cell: {cell:.4g} cm^3  density: {dens}")
+            f"total cells: {total:,}  per-cell: {cell:.4g} mm^3  density: {dens}")
 
     def _schedule_rebuild(self):
         self._update_density()
@@ -255,23 +423,84 @@ class VoxelDialog(QDialog):
 
     # -- 3D preview --
 
+    def _ensure_preview(self):
+        """Create the VTK preview now that the dialog is mapped + sized.
+
+        Run once on the first show. The real widget replaces the placeholder
+        in the right-hand column and is constructed with its final parent
+        already visible, so the interactor's native window is born inside the
+        shown dialog (no stray top-level native window -> no re-parent on show
+        -> no Windows geometry-clamp warnings / combo-popup misplacement).
+        """
+        if getattr(self, "_closed", False):
+            return
+        # The default size was deferred because on first activation the layout
+        # shrinks the window to its sizeHint; apply it before laying out the
+        # preview so the interactor never sees a transient geometry.
+        if not getattr(self, "_size_applied", False):
+            self._size_applied = True
+            # Default width keeps a column sized to the widest quantity row
+            # (or a reasonable minimum) plus a large 3D preview.
+            self._default_size = (
+                min(1600, max(1120, self._form_col_width() + 640)), 700)
+            self.resize(*fit_size_to_screen(self, *self._default_size))
+            # Fit the left column to its widest quantity row; the preview
+            # column receives all the remaining width.
+            self._apply_form_width()
+        if os.environ.get("EASY2RAD_NO_VTK"):
+            # Debug switch: keep the placeholder, never build a VTK widget
+            self._preview_ph.setText(
+                "VTK preview disabled (EASY2RAD_NO_VTK) - debugging")
+            return
+        if self._preview is not None:
+            QTimer.singleShot(0, self._build_preview)
+            return
+        idx = self._pv_layout.indexOf(self._preview_ph)
+        self._preview = VtkPreviewWidget(self._preview_host)
+        self._pv_layout.removeWidget(self._preview_ph)
+        self._preview_ph.deleteLater()
+        self._pv_layout.insertWidget(idx, self._preview, 1)
+        self._preview.show()
+        self._preview.set_dark_theme(self._dark)
+        QTimer.singleShot(0, self._build_preview)
+
     def _build_preview(self):
+        if getattr(self, "_closed", False):
+            return
+        if self._preview is None:
+            self._preview_built = True
+            return
         try:
             root = self._agent.get_root_node()
             # Consistent with the main window: render World + physical
             # instances only, to avoid overlapping logical-volume definitions
             self._preview.build_scene(root, render_all_volumes=False)
-            # Geometry is displayed as a wireframe
+            # Geometry as a translucent solid - same look as the probe dialog,
+            # only a bit more transparent (0.25 vs 0.35) so the volume
+            # structure is readable while the voxel overlay stays the visual
+            # focus. World is still a thin wireframe (factory default).
             from vtkmodules.vtkRenderingCore import vtkActor
             for i in range(self._preview.get_scene().renderer.GetViewProps()
                            .GetNumberOfItems()):
                 prop = self._preview.get_scene().renderer.GetViewProps().GetItemAsObject(i)
                 if isinstance(prop, vtkActor):
-                    prop.GetProperty().SetRepresentationToWireframe()
-                    prop.GetProperty().SetOpacity(0.6)
+                    prop.GetProperty().SetOpacity(0.25)
             self._rebuild_mesh()
         except Exception as e:
             print(f"[VoxelDialog] preview build failed: {e}")
+
+    def _subdiv_color(self):
+        """Subdivision-line color: light in dark mode, dark in light mode, so
+        the grid stays readable over the translucent geometry bodies."""
+        return (0.78, 0.78, 0.82) if self._dark else (0.18, 0.18, 0.18)
+
+    def _recolor_overlay(self):
+        """Re-tint the voxel overlay when the theme flips."""
+        if self._mesh_actor is not None and self._preview is not None:
+            p = self._mesh_actor.GetProperty()
+            p.SetColor(*self._subdiv_color())
+            p.SetOpacity(0.8)
+            self._preview.render()
 
     def _build_mesh_polydata(self, half, center, nbin):
         """Outer frame + subdivision lines (thinned out by density); returns a
@@ -334,15 +563,21 @@ class VoxelDialog(QDialog):
         return poly
 
     def _rebuild_mesh(self):
+        if self._preview is None:
+            return
         scene = self._preview.get_scene()
         if scene is None:
             return
+        # Modes are exclusive: first drop the whole previous overlay (the
+        # subdivision actor AND the outer frame), then draw the current box.
         if self._mesh_actor:
             scene.renderer.RemoveActor(self._mesh_actor)
             self._mesh_actor = None
+        if getattr(self, "_mesh_actor_frame", None):
+            scene.renderer.RemoveActor(self._mesh_actor_frame)
+            self._mesh_actor_frame = None
 
-        half = [s.value() for s in self._half_spins]
-        center = [s.value() for s in self._center_spins]
+        half, center = self._effective_box()
         nbin = [s.value() for s in self._nbin_spins]
 
         poly = self._build_mesh_polydata(half, center, nbin)
@@ -350,8 +585,8 @@ class VoxelDialog(QDialog):
         mapper.SetInputData(poly)
         actor = vtkActor()
         actor.SetMapper(mapper)
-        actor.GetProperty().SetColor(0.1, 0.1, 0.1)   # subdivision lines in dark gray
-        actor.GetProperty().SetOpacity(0.45)
+        actor.GetProperty().SetColor(*self._subdiv_color())
+        actor.GetProperty().SetOpacity(0.8)
         actor.GetProperty().SetLineWidth(1)
         scene.renderer.AddActor(actor)
         self._mesh_actor = actor
@@ -379,13 +614,25 @@ class VoxelDialog(QDialog):
     # -- Save --
 
     def _save(self):
+        mode = self._mode()
+        half, center = self._effective_box()
+        # Persist the *resolved* box (half/center) and the mode/volume name.
+        # The solver CSV only stores voxel indices — no coordinates — so this
+        # snapshot is what later maps index -> world coordinate (see
+        # doc/result_coupling_design.md §3.1). Lengths are stored in the same
+        # unit the geometry is rendered in ("unit": mm).
         self._cfg = {
-            "mode": "manual" if self._radio_manual.isChecked() else "all_geo",
-            "half": [s.value() for s in self._half_spins],
+            "mode": mode,
+            "half": list(half),
             "nbin": [s.value() for s in self._nbin_spins],
-            "center": [s.value() for s in self._center_spins],
-            "selected": "",
+            "center": list(center),
+            "selected": (self._vol_cb.currentData() or "")
+                        if mode == "volume" else "",
             "qs": self._q_panel.get_quantities(),
+            "unit": "mm",
+            "bbox": list(self._auto_bbox)
+                    if mode != "manual"
+                    and getattr(self, "_auto_bbox", None) else None,
         }
         if self._task is not None:
             cfg = self._task.analysis_config or {}
@@ -397,8 +644,11 @@ class VoxelDialog(QDialog):
         if isinstance(parent, MainWindow):
             parent.on_analysis_saved(self._task.name, self.CONFIG_KEY,
                                      configured)
+        # Close as soon as saving is done (same as the realworld dialog)
+        self.close()
 
     def closeEvent(self, event):
+        self._closed = True
         super().closeEvent(event)
         # Closing destroys everything: Finalize the VTK render window, call
         # deleteLater, and tell the main window to drop the cache. The next
@@ -406,10 +656,11 @@ class VoxelDialog(QDialog):
         # which avoids the wglMakeCurrent failed / shader compilation failures
         # caused by the legacy QVTKRenderWindowInteractor leaving stale
         # windows behind on hide under PyQt6.
-        try:
-            self._preview.cleanup()
-        except Exception:
-            pass
+        if self._preview is not None:
+            try:
+                self._preview.cleanup()
+            except Exception:
+                pass
         self.close_requested.emit()
         self.deleteLater()
 
@@ -421,5 +672,6 @@ class VoxelDialog(QDialog):
         self.setStyleSheet(DIALOG_STYLE(self._dark))
         try:
             self._preview.set_dark_theme(self._dark)
+            self._recolor_overlay()
         except Exception:
             pass

@@ -78,61 +78,184 @@ def gen_quantity_name(existing: list) -> str:
     return f"q{n}"
 
 
+def fit_size_to_screen(dialog, w: int, h: int,
+                       h_margin: int = 80, v_margin: int = 140):
+    """Clamp a requested default dialog size to the current screen.
+
+    Windows at >100% display scaling report a smaller usable area in logical
+    pixels; a hard-coded default width (e.g. 1150) would then exceed the
+    screen and the layout would squeeze the right-hand panel until a
+    horizontal scroll bar appears. Returns (w, h) capped to the screen.
+    """
+    screen = dialog.screen()
+    if screen is None:
+        from PyQt6.QtGui import QGuiApplication
+        screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return w, h
+    geo = screen.availableGeometry()
+    return (min(w, max(640, geo.width() - h_margin)),
+            min(h, max(480, geo.height() - v_margin)))
+
+
 # -- Theme QSS (same tokens as the main window, consumed by all dialogs) --
 
 def DIALOG_STYLE(dark: bool) -> str:
+    """Shared modern style for the realworld / probe / voxel dialogs.
+
+    Follows the gdmleditor / cad2gdml look: white(ish) panels, 6px rounded
+    inputs with hover + focus accent, a styled combo drop-down button with a
+    CSS-triangle arrow and a rounded popup list whose items highlight on
+    hover.  Light theme uses the #0078d4 accent; the dark theme mirrors the
+    same structure with Catppuccin tokens, so the three dialogs stay visually
+    unified in both modes.
+    """
     if dark:
         return """
         QDialog { background-color: #1e1e2e; }
-        QLabel { color: #cdd6f4; font-size: 12px; }
+        QLabel { color: #cdd6f4; font-size: 12px; background: transparent; }
         QGroupBox { color: #cdd6f4; font-weight: bold;
-            border: 1px solid #45475a; border-radius: 6px;
-            margin-top: 12px; padding: 12px 8px 8px 8px; }
-        QGroupBox::title { subcontrol-origin: margin; padding: 2px 8px; color: #89b4fa; }
+            border: 1px solid #45475a; border-radius: 8px;
+            margin-top: 10px; padding: 14px 10px 10px 10px;
+            font-size: 12px; background: transparent; }
+        QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;
+            padding: 0 8px; color: #89b4fa; }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
             background-color: #313244; color: #cdd6f4;
-            border: 1px solid #45475a; border-radius: 4px;
-            padding: 3px 6px; font-size: 12px; }
-        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+            border: 1px solid #45475a; border-radius: 6px;
+            padding: 4px 10px; font-size: 12px; min-height: 20px;
+            selection-background-color: #89b4fa; selection-color: #1e1e2e; }
+        QComboBox { padding: 4px 26px 4px 10px; }
+        QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
             border: 1px solid #89b4fa; }
-        QCheckBox { color: #cdd6f4; font-size: 12px; }
+        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+            border: 1px solid #89b4fa; background-color: #2a2b3d; }
+        QComboBox:on { border: 1px solid #89b4fa; background-color: #2a2b3d; }
+        QComboBox::drop-down { subcontrol-origin: padding;
+            subcontrol-position: top right; width: 22px;
+            border: none; border-left: 1px solid #45475a;
+            border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+        QComboBox:hover::drop-down { border-left: 1px solid #89b4fa; }
+        QComboBox::down-arrow { width: 0; height: 0;
+            border-left: 5px solid transparent; border-right: 5px solid transparent;
+            border-top: 5px solid #a6adc8; margin: 2px; }
+        QComboBox QAbstractItemView { background-color: #181825; color: #cdd6f4;
+            border: 1px solid #45475a; border-radius: 8px; padding: 4px;
+            outline: none; selection-background-color: transparent;
+            selection-color: #cdd6f4; }
+        QComboBox QAbstractItemView::item { padding: 6px 10px;
+            min-height: 22px; border-radius: 4px; }
+        QComboBox QAbstractItemView::item:hover { background-color: #313244; }
+        QComboBox QAbstractItemView::item:selected {
+            background-color: #45475a; color: #ffffff; }
+        QRadioButton { color: #cdd6f4; font-size: 12px;
+            background: transparent; border: none; spacing: 6px; }
+        QCheckBox { color: #cdd6f4; font-size: 12px; background: transparent; spacing: 6px; }
+        QFrame#rowCard { background-color: #26263a;
+            border: 1px solid #3a3a4e; border-radius: 6px; }
         QPushButton { background-color: #313244; color: #cdd6f4;
             border: 1px solid #45475a; border-radius: 6px;
-            padding: 6px 16px; font-size: 12px; }
+            padding: 5px 16px; font-size: 12px; }
         QPushButton:hover { background-color: #45475a; border: 1px solid #89b4fa; }
+        QPushButton:pressed { background-color: #585b70; }
+        QPushButton:disabled { color: #6c7086; background-color: #26263a;
+            border: 1px solid #313244; }
         QListWidget, QTreeWidget { background-color: #181825; color: #cdd6f4;
-            border: 1px solid #45475a; border-radius: 4px; font-size: 12px; }
-        QListWidget::item:selected, QTreeWidget::item:selected { background-color: #45475a; }
-        QTreeWidget::item:hover { background-color: #282840; }
-        QScrollArea { border: none; }
-        QScrollBar:vertical { background-color: #1e1e2e; width: 8px; }
-        QScrollBar::handle:vertical { background-color: #45475a; border-radius: 4px; }
+            border: 1px solid #45475a; border-radius: 8px; font-size: 12px;
+            outline: none; }
+        QListWidget::item { padding: 4px 8px; border-radius: 4px; }
+        QListWidget::item:selected, QTreeWidget::item:selected {
+            background-color: #45475a; color: #ffffff; }
+        QListWidget::item:hover, QTreeWidget::item:hover { background-color: #313244; }
+        QHeaderView::section { background-color: #313244; color: #a6adc8;
+            border: none; border-bottom: 1px solid #45475a;
+            padding: 4px 8px; font-size: 11px; }
+        QScrollArea { border: none; background: transparent; }
+        QScrollArea > QWidget > QWidget { background: transparent; }
+        QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
+        QScrollBar::handle:vertical { background-color: #45475a;
+            border-radius: 4px; min-height: 20px; }
+        QScrollBar::handle:vertical:hover { background-color: #585b70; }
+        QScrollBar:horizontal { background: transparent; height: 8px; margin: 0; }
+        QScrollBar::handle:horizontal { background-color: #45475a;
+            border-radius: 4px; min-width: 20px; }
+        QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+        QSplitter::handle { background-color: #313244; }
+        QToolTip { background-color: #313244; color: #cdd6f4;
+            border: 1px solid #45475a; padding: 4px 8px; }
         """
     return """
         QDialog { background-color: #f5f5f5; }
-        QLabel { color: #2c2c2c; font-size: 12px; }
+        QLabel { color: #2c2c2c; font-size: 12px; background: transparent; }
         QGroupBox { color: #2c2c2c; font-weight: bold;
-            border: 1px solid #d0d0d0; border-radius: 6px;
-            margin-top: 12px; padding: 12px 8px 8px 8px; }
-        QGroupBox::title { subcontrol-origin: margin; padding: 2px 8px; color: #0078d4; }
+            border: 1px solid #d0d0d0; border-radius: 8px;
+            margin-top: 10px; padding: 14px 10px 10px 10px;
+            font-size: 12px; background: transparent; }
+        QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left;
+            padding: 0 8px; color: #0078d4; }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
             background-color: #ffffff; color: #2c2c2c;
-            border: 1px solid #d0d0d0; border-radius: 4px;
-            padding: 3px 6px; font-size: 12px; }
+            border: 1px solid #d0d0d0; border-radius: 6px;
+            padding: 4px 10px; font-size: 12px; min-height: 20px;
+            selection-background-color: #0078d4; selection-color: #ffffff; }
+        QComboBox { padding: 4px 26px 4px 10px; }
+        QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
+            border: 1px solid #0078d4; background-color: #f8f9fa; }
         QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-            border: 1px solid #0078d4; }
-        QCheckBox { color: #2c2c2c; font-size: 12px; }
+            border: 1px solid #0078d4; background-color: #f0f4ff; }
+        QComboBox:on { border: 1px solid #0078d4; background-color: #f0f4ff; }
+        QComboBox::drop-down { subcontrol-origin: padding;
+            subcontrol-position: top right; width: 22px;
+            border: none; border-left: 1px solid #e0e0e0;
+            border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+        QComboBox:hover::drop-down { border-left: 1px solid #0078d4; }
+        QComboBox::down-arrow { width: 0; height: 0;
+            border-left: 5px solid transparent; border-right: 5px solid transparent;
+            border-top: 5px solid #666666; margin: 2px; }
+        QComboBox QAbstractItemView { background-color: #ffffff; color: #2c2c2c;
+            border: 1px solid #d0d0d0; border-radius: 8px; padding: 4px;
+            outline: none; selection-background-color: transparent;
+            selection-color: #2c2c2c; }
+        QComboBox QAbstractItemView::item { padding: 6px 10px;
+            min-height: 22px; border-radius: 4px; }
+        QComboBox QAbstractItemView::item:hover { background-color: #e8f0fe; }
+        QComboBox QAbstractItemView::item:selected {
+            background-color: #d2e3fc; color: #1a1a1a; }
+        QRadioButton { color: #2c2c2c; font-size: 12px;
+            background: transparent; border: none; spacing: 6px; }
+        QCheckBox { color: #2c2c2c; font-size: 12px; background: transparent; spacing: 6px; }
+        QFrame#rowCard { background-color: #ffffff;
+            border: 1px solid #e0e0e0; border-radius: 6px; }
         QPushButton { background-color: #f0f0f0; color: #2c2c2c;
             border: 1px solid #d0d0d0; border-radius: 6px;
-            padding: 6px 16px; font-size: 12px; }
+            padding: 5px 16px; font-size: 12px; }
         QPushButton:hover { background-color: #e4e7eb; border: 1px solid #0078d4; }
+        QPushButton:pressed { background-color: #d2d5d9; }
+        QPushButton:disabled { color: #a0a0a0; background-color: #f7f7f7;
+            border: 1px solid #e0e0e0; }
         QListWidget, QTreeWidget { background-color: #ffffff; color: #2c2c2c;
-            border: 1px solid #d0d0d0; border-radius: 4px; font-size: 12px; }
-        QListWidget::item:selected, QTreeWidget::item:selected { background-color: #d0e4f6; color: #1a1a1a; }
-        QTreeWidget::item:hover { background-color: #eef3fb; }
-        QScrollArea { border: none; }
-        QScrollBar:vertical { background-color: #f0f0f0; width: 8px; }
-        QScrollBar::handle:vertical { background-color: #c0c0c0; border-radius: 4px; }
+            border: 1px solid #d0d0d0; border-radius: 8px; font-size: 12px;
+            outline: none; }
+        QListWidget::item { padding: 4px 8px; border-radius: 4px; }
+        QListWidget::item:selected, QTreeWidget::item:selected {
+            background-color: #d2e3fc; color: #1a1a1a; }
+        QListWidget::item:hover, QTreeWidget::item:hover { background-color: #eef3fb; }
+        QHeaderView::section { background-color: #ececec; color: #666666;
+            border: none; border-bottom: 1px solid #d0d0d0;
+            padding: 4px 8px; font-size: 11px; }
+        QScrollArea { border: none; background: transparent; }
+        QScrollArea > QWidget > QWidget { background: transparent; }
+        QScrollBar:vertical { background: transparent; width: 8px; margin: 0; }
+        QScrollBar::handle:vertical { background-color: #c0c0c0;
+            border-radius: 4px; min-height: 20px; }
+        QScrollBar::handle:vertical:hover { background-color: #a0a0a0; }
+        QScrollBar:horizontal { background: transparent; height: 8px; margin: 0; }
+        QScrollBar::handle:horizontal { background-color: #c0c0c0;
+            border-radius: 4px; min-width: 20px; }
+        QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+        QSplitter::handle { background-color: #d0d0d0; }
+        QToolTip { background-color: #ffffff; color: #2c2c2c;
+            border: 1px solid #d0d0d0; padding: 4px 8px; }
         """
 
 
@@ -281,19 +404,22 @@ def filter_summary(f) -> str:
 # -- Quantity row --
 
 class QuantityRowWidget(QFrame):
-    """A single quantity row: name + type + unit (locked) + filter button +
-    delete."""
+    """A single quantity row: name + type (fixed width) + unit column (fixed)
+    + particle filter dropdown + delete."""
 
     changed = pyqtSignal()
     removed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._filter_editor = None
         self._build_ui()
 
     def _build_ui(self):
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        # Themed "card": DIALOG_STYLE paints QFrame#rowCard with theme tokens
+        # (both light/dark), so these rows never fall back to the default
+        # (light) palette in dark mode.
+        self.setObjectName("rowCard")
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 6, 8, 6)
         v.setSpacing(4)
@@ -303,26 +429,42 @@ class QuantityRowWidget(QFrame):
 
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("q1")
-        self._name_edit.setFixedWidth(90)
+        self._name_edit.setFixedWidth(110)
         self._name_edit.textChanged.connect(self.changed.emit)
         row.addWidget(self._name_edit)
 
         self._type_cb = QComboBox()
         for key, _label, _u, _h in QUANTITY_TYPES:
             self._type_cb.addItem(key, key)
+        # Fixed width: the dropdown no longer stretches across the row, so the
+        # unit column stays at a stable position.
+        self._type_cb.setFixedWidth(180)
         self._type_cb.currentIndexChanged.connect(self._on_type_changed)
-        row.addWidget(self._type_cb, 1)
+        row.addWidget(self._type_cb)
 
+        # Fixed-width unit column: aligned and never shifts when the type
+        # (and therefore the unit text) changes.
         self._unit_label = QLabel("")
+        # No explicit colour: inherit the dialog theme's text colour, so the
+        # unit stays readable in both light and dark mode.
         self._unit_label.setStyleSheet(
-            "color: #888888; font-family: Consolas; font-size: 11px;")
+            "font-family: Consolas; font-size: 11px;")
+        self._unit_label.setFixedWidth(64)
+        self._unit_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         row.addWidget(self._unit_label)
 
-        self._filter_btn = QPushButton("+ filter")
-        self._filter_btn.setCheckable(True)
-        self._filter_btn.setFixedWidth(120)
-        self._filter_btn.toggled.connect(self._on_toggle_filter)
-        row.addWidget(self._filter_btn)
+        # Particle filter as a single dropdown ("no filter" by default)
+        self._filter_cb = QComboBox()
+        self._filter_cb.addItem("no filter", None)
+        for p in PARTICLE_CHOICES:
+            self._filter_cb.addItem(p, p)
+        self._filter_cb.setFixedWidth(120)
+        self._filter_cb.currentIndexChanged.connect(self.changed.emit)
+        row.addWidget(self._filter_cb)
+
+        # Remaining space goes before the delete button, so the ✕ sits at the
+        # right edge - aligned with the histogram rows' delete buttons.
+        row.addStretch()
 
         del_btn = QPushButton("✕")
         del_btn.setFixedWidth(28)
@@ -339,27 +481,12 @@ class QuantityRowWidget(QFrame):
         self._unit_label.setText(f"[{unit}]" if unit else "[count]")
         self.changed.emit()
 
-    def _on_toggle_filter(self, checked: bool):
-        if checked and self._filter_editor is None:
-            self._filter_editor = FilterEditor()
-            self._filter_editor.changed.connect(self._sync_filter_btn)
-            self.layout().addWidget(self._filter_editor)
-        if self._filter_editor:
-            self._filter_editor.setVisible(checked)
-        self._sync_filter_btn()
-
-    def _sync_filter_btn(self):
-        f = self._filter_editor.get_filter() if self._filter_editor else None
-        self._filter_btn.setText(filter_summary(f))
-        self._filter_btn.setChecked(
-            self._filter_editor is not None and self._filter_editor.isVisible())
-        self.changed.emit()
-
     def get_quantity(self) -> dict:
+        p = self._filter_cb.currentData()
         return {
             "name": self._name_edit.text().strip() or "q",
             "type": self._type_cb.currentData() or "energyDeposit",
-            "filter": self._filter_editor.get_filter() if self._filter_editor else None,
+            "filter": {"t": "particle", "p": p} if p else None,
         }
 
     def set_quantity(self, q: dict):
@@ -368,16 +495,12 @@ class QuantityRowWidget(QFrame):
         idx = self._type_cb.findData(t)
         if idx >= 0:
             self._type_cb.setCurrentIndex(idx)
-        f = q.get("filter")
-        if f:
-            if self._filter_editor is None:
-                self._filter_editor = FilterEditor()
-                self._filter_editor.changed.connect(self._sync_filter_btn)
-                self.layout().addWidget(self._filter_editor)
-            self._filter_editor.set_filter(f)
-            self._filter_editor.setVisible(True)
-            self._filter_btn.setChecked(True)
-        self._sync_filter_btn()
+        f = q.get("filter") or {}
+        if f.get("t") == "particle":
+            pidx = self._filter_cb.findData(f.get("p"))
+            if pidx >= 0:
+                self._filter_cb.setCurrentIndex(pidx)
+        # Non-particle filters (legacy configs) fall back to "no filter".
 
 
 # -- Quantity list panel --
@@ -387,9 +510,12 @@ class QuantityListPanel(QWidget):
 
     changed = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, stretchable=False,
+                 scroll_min_height=210):
         super().__init__(parent)
         self._rows = []
+        self._stretchable = stretchable
+        self._scroll_min_height = scroll_min_height
         self._build_ui()
 
     def _build_ui(self):
@@ -407,7 +533,13 @@ class QuantityListPanel(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedHeight(210)
+        if self._stretchable:
+            # Elastic height: the dialog layout distributes the extra
+            # vertical space between the quantity/histogram areas so the
+            # right panel fills the window instead of leaving gaps.
+            scroll.setMinimumHeight(self._scroll_min_height)
+        else:
+            scroll.setFixedHeight(self._scroll_min_height)
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._container = QWidget()
@@ -455,27 +587,31 @@ class QuantityListPanel(QWidget):
 # -- Histogram row --
 
 class HistogramRowWidget(QFrame):
-    """A single energy-spectrum histogram row: target quantity + bins + range
-    + log + delete."""
+    """A single 1D-histogram row: target quantity + bins + range (the range
+    unit follows the linked quantity) + log + delete."""
 
     changed = pyqtSignal()
     removed = pyqtSignal(object)
 
-    def __init__(self, qnames: list, parent=None):
+    def __init__(self, qnames: list, qunits: dict = None, parent=None):
         super().__init__(parent)
         self._qnames = qnames
+        self._qunits = qunits or {}
         self._build_ui()
 
     def _build_ui(self):
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setObjectName("rowCard")
         row = QHBoxLayout(self)
         row.setContentsMargins(8, 5, 8, 5)
-        row.setSpacing(6)
+        # Tight spacing keeps the row narrow enough that no horizontal
+        # scroll bar appears in the right-hand panels of the dialogs.
+        row.setSpacing(5)
 
-        row.addWidget(QLabel("Associated quantity:"))
+        row.addWidget(QLabel("Quantity:"))
         self._q_cb = QComboBox()
-        self._q_cb.addItems(self._qnames if self._qnames else ["—"])
-        self._q_cb.currentIndexChanged.connect(self.changed.emit)
+        self._q_cb.setMinimumWidth(110)
+        self._q_cb.currentIndexChanged.connect(self._on_q_changed)
         row.addWidget(self._q_cb, 1)
 
         row.addWidget(QLabel("bins:"))
@@ -490,6 +626,7 @@ class HistogramRowWidget(QFrame):
         self._min.setRange(-1e12, 1e12)
         self._min.setDecimals(4)
         self._min.setValue(0.001)
+        self._min.setFixedWidth(88)
         self._min.valueChanged.connect(self.changed.emit)
         row.addWidget(self._min)
         row.addWidget(QLabel("–"))
@@ -497,8 +634,17 @@ class HistogramRowWidget(QFrame):
         self._max.setRange(-1e12, 1e12)
         self._max.setDecimals(4)
         self._max.setValue(1000.0)
+        self._max.setFixedWidth(88)
         self._max.valueChanged.connect(self.changed.emit)
         row.addWidget(self._max)
+
+        # Range unit (MeV / mm / ...) follows the selected quantity. No
+        # explicit colour: inherits the theme's text colour (light/dark).
+        self._unit_label = QLabel("")
+        self._unit_label.setStyleSheet(
+            "font-family: Consolas; font-size: 11px;")
+        self._unit_label.setFixedWidth(40)
+        row.addWidget(self._unit_label)
 
         self._log = QCheckBox("log")
         self._log.stateChanged.connect(self.changed.emit)
@@ -508,6 +654,24 @@ class HistogramRowWidget(QFrame):
         del_btn.setFixedWidth(28)
         del_btn.clicked.connect(lambda: self.removed.emit(self))
         row.addWidget(del_btn)
+
+        self._set_choices(self._qnames, self._qunits)
+
+    def _set_choices(self, qnames: list, qunits: dict = None):
+        """Repopulate the target-quantity combo and refresh the range unit."""
+        self._qnames = qnames
+        self._qunits = qunits or {}
+        self._q_cb.blockSignals(True)
+        self._q_cb.clear()
+        self._q_cb.addItems(qnames if qnames else ["—"])
+        self._q_cb.blockSignals(False)
+        self._on_q_changed()
+
+    def _on_q_changed(self):
+        name = self._q_cb.currentText()
+        unit = self._qunits.get(name, "")
+        self._unit_label.setText(unit if unit else "")
+        self.changed.emit()
 
     def get_histogram(self) -> dict:
         return {
@@ -534,9 +698,12 @@ class HistogramListPanel(QWidget):
 
     changed = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, stretchable=False,
+                 scroll_min_height=150):
         super().__init__(parent)
         self._rows = []
+        self._stretchable = stretchable
+        self._scroll_min_height = scroll_min_height
         self._build_ui()
 
     def _build_ui(self):
@@ -545,7 +712,7 @@ class HistogramListPanel(QWidget):
         v.setSpacing(6)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel("Energy spectrum histogram"))
+        header.addWidget(QLabel("1D histogram"))
         header.addStretch()
         add_btn = QPushButton("➕ Add histogram")
         add_btn.clicked.connect(self.add_row)
@@ -554,7 +721,10 @@ class HistogramListPanel(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedHeight(150)
+        if self._stretchable:
+            scroll.setMinimumHeight(self._scroll_min_height)
+        else:
+            scroll.setFixedHeight(self._scroll_min_height)
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._container = QWidget()
@@ -568,20 +738,21 @@ class HistogramListPanel(QWidget):
     def _usable_qnames(self) -> list:
         return self._qnames if hasattr(self, "_qnames") else []
 
-    def set_qnames(self, qnames: list):
+    def set_qnames(self, qnames: list, units: dict = None):
         """Candidate target quantities = names of the quantities in the
-        current panel that support fill1D.
+        current panel that support fill1D (units maps name -> range unit).
 
         Update and emit the signal only when the candidates really change
         (to avoid a changed -> sync -> changed infinite loop).
         """
-        if getattr(self, "_qnames", None) == qnames:
+        if (getattr(self, "_qnames", None) == qnames
+                and getattr(self, "_qunits", None) == units):
             return
         self._qnames = qnames
+        self._qunits = units or {}
         for r in self._rows:
             old = r.get_histogram()["q"]
-            r._q_cb.clear()
-            r._q_cb.addItems(qnames if qnames else ["—"])
+            r._set_choices(qnames, self._qunits)
             idx = r._q_cb.findText(old)
             if idx >= 0:
                 r._q_cb.setCurrentIndex(idx)
@@ -591,7 +762,7 @@ class HistogramListPanel(QWidget):
         names = self._usable_qnames()
         if not names:
             return
-        row = HistogramRowWidget(names)
+        row = HistogramRowWidget(names, getattr(self, "_qunits", {}))
         if h:
             row.set_histogram(h)
         row.changed.connect(self.changed.emit)

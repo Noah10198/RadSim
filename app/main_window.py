@@ -1,5 +1,5 @@
 """
-MainWindow - the 3dRad main window
+MainWindow - the RadSim main window
 
 Layout, theme, and sizing follow gdmleditor (cad2gdml lineage) item by item:
   - Ribbon toolbar (emoji icons + text below, 72px tall)
@@ -27,11 +27,13 @@ from utils.logger import AsyncLogger, LogLevel
 from ui.ribbon_toolbar import RibbonToolBar
 from ui.project_tree import ProjectTreeWidget
 from ui.vtk_widget import VtkWidget
-from ui.dialogs.run_monitor import RunMonitorDialog
+from ui.dialogs.run_monitor import RunMonitorDialog, TaskMonitorDialog
 from ui.dialogs.calculate_setting_dialog import CalculateSettingDialog
+from ui.dialogs.solver_setting_dialog import SolverSettingDialog
 from ui.dialogs.realworld_dialog import RealWorldDialog
 from ui.dialogs.probe_dialog import ProbeDialog
 from ui.dialogs.voxel_dialog import VoxelDialog
+from ui.dialogs.particle_dialog import ParticleDialog
 
 
 # Parse GDML above this size (bytes) on a background thread to keep the main
@@ -82,7 +84,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("3dRad - 3D Radiation Simulation")
+        self.setWindowTitle("RadSim - 3D Radiation Simulation")
         self.resize(1400, 900)
         self._dark_theme = False
 
@@ -99,10 +101,12 @@ class MainWindow(QMainWindow):
 
         # Multi-task running (queue + concurrency cap; see core/run_manager.py)
         self._run_manager = RunManager(max_concurrent=2)
-        self._run_monitor: Optional[RunMonitorDialog] = None
+        self._run_launcher: Optional[RunMonitorDialog] = None
+        self._task_monitor: Optional[TaskMonitorDialog] = None
         self._task_counter = 0
         self._gdml_paths: list[str] = []  # real paths of imported GDML (for project save)
         self._analysis_dialogs: dict[tuple, object] = {}  # (task, kind) -> dialog
+        self._particle_dialogs: dict[tuple, object] = {}  # ("particle", task) -> dialog
 
         self._init_toolbar()
         self._init_project_tree()
@@ -119,7 +123,7 @@ class MainWindow(QMainWindow):
         # so it can run directly)
         self._ensure_default_task()
 
-        self._logger.log_system("3dRad started")
+        self._logger.log_system("RadSim started")
         self._logger.log_system("Ready — click [📁 Import GDML] to load a geometry.")
         self._logger.log_system("Default task Run_001 created (right-click Tasks to add more)")
 
@@ -197,9 +201,19 @@ class MainWindow(QMainWindow):
 
     def _toggle_theme(self):
         self._apply_global_theme(not self._dark_theme)
-        if self._run_monitor is not None:
-            self._run_monitor.set_dark_theme(self._dark_theme)
+        if self._run_launcher is not None:
+            self._run_launcher.set_dark_theme(self._dark_theme)
+        if self._task_monitor is not None:
+            self._task_monitor.set_dark_theme(self._dark_theme)
+        solver_dlg = getattr(self, "_solver_dialog", None)
+        if solver_dlg is not None:
+            solver_dlg.set_dark_theme(self._dark_theme)
         for dlg in self._analysis_dialogs.values():
+            try:
+                dlg.set_dark_theme(self._dark_theme)
+            except Exception:
+                pass
+        for dlg in self._particle_dialogs.values():
             try:
                 dlg.set_dark_theme(self._dark_theme)
             except Exception:
@@ -232,7 +246,7 @@ class MainWindow(QMainWindow):
         self._center_placeholder = QLabel(
             "No 3D view loaded\n\n"
             "Click [📁 Import GDML] on the toolbar to load a GDML file.\n"
-            "3dRad focuses on calculation: only one GDML geometry is allowed at a time.")
+            "RadSim focuses on calculation: only one GDML geometry is allowed at a time.")
         self._center_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._center_placeholder.setStyleSheet(
             "color: #6c7086; font-size: 14px; padding: 40px;")
@@ -241,7 +255,8 @@ class MainWindow(QMainWindow):
         self._vtk_widget = VtkWidget()
         self._vtk_widget.set_dark_theme(self._dark_theme)
         self._vtk_widget.node_picked.connect(self._on_node_picked)
-        self._vtk_widget.setVisible(True)
+        # Same as gdmleditor: hide until the layout below shows the 3D view.
+        self._vtk_widget.setVisible(False)
 
     def _init_log_panel(self):
         self._log_widget = QTextEdit()
@@ -254,7 +269,9 @@ class MainWindow(QMainWindow):
     def _init_layout(self):
         self._center_stack = QStackedWidget()
         self._center_stack.addWidget(self._center_placeholder)  # index 0
-        self._center_stack.addWidget(self._vtk_widget)          # index 1
+        self._center_stack.addWidget(self._vtk_widget)          # index 1 — default 3D view
+        # Show the 3D view immediately (with cube axes + XYZ labels), exactly
+        # like gdmleditor. The placeholder page is only a fallback.
         self._vtk_widget.setVisible(True)
         self._center_stack.setCurrentIndex(1)
 
@@ -280,6 +297,7 @@ class MainWindow(QMainWindow):
         self._toolbar.run_clicked.connect(self._on_run)
         self._toolbar.stop_clicked.connect(self._on_stop)
         self._toolbar.status_clicked.connect(self._on_status_clicked)
+        self._toolbar.solver_setting_clicked.connect(self._on_solver_setting)
         self._toolbar.theme_toggled.connect(self._toggle_theme)
         self._toolbar.help_clicked.connect(self._on_help)
 
@@ -298,7 +316,7 @@ class MainWindow(QMainWindow):
     # ==================== GDML Import ====================
 
     def _on_import_gdml(self):
-        """3dRad allows only one GDML: importing again first asks whether to
+        """RadSim allows only one GDML: importing again first asks whether to
         replace."""
         if self._import_thread and self._import_thread.isRunning():
             QMessageBox.information(
@@ -313,7 +331,7 @@ class MainWindow(QMainWindow):
         if self._gdml_agent.get_all_file_nodes():
             ret = QMessageBox.question(
                 self, "Replace Geometry",
-                "A geometry already exists. 3dRad supports only one GDML geometry.\n\n"
+                "A geometry already exists. RadSim supports only one GDML geometry.\n\n"
                 "Replace the existing geometry? (the task list will be cleared)",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No)
@@ -332,7 +350,7 @@ class MainWindow(QMainWindow):
             self._replace_gdml_async(file_path)
 
     def _replace_gdml(self, filepath: str) -> bool:
-        """Replace the current geometry (3dRad's single GDML) and refresh the
+        """Replace the current geometry (RadSim's single GDML) and refresh the
         main window."""
         self._gdml_agent.clear()
         success, msg = self._gdml_agent.load_gdml_file(filepath)
@@ -493,20 +511,22 @@ class MainWindow(QMainWindow):
             f"Planning: see doc/GUI_Design.md and doc/implementation_roadmap.md.")
 
     def _on_run(self):
-        """Run: first ask whether to split CPU cores evenly across task
-        threads, then open the monitor."""
+        """Run: optionally ask for even CPU-core assignment, then open the
+        slim run launcher (checkbox list + Run Selected)."""
         if not self._gdml_agent.get_all_file_nodes():
             QMessageBox.information(
-                self, "No Geometry", "Please import a GDML file before creating a run task.")
+                self, "No Geometry",
+                "Please import a GDML file before creating a run task.")
             return
-        monitor = self._ensure_run_monitor()
+        launcher = self._ensure_run_launcher()
         tasks = list(self._run_manager._tasks.values())
         if not tasks:
             QMessageBox.information(
                 self, "No Tasks",
-                "No tasks yet. Add a task in the Run Monitor via [➕ Add Task] before running.")
-            monitor.show()
-            monitor.raise_()
+                "No tasks yet. Add a task by right-clicking \"Tasks\" in the "
+                "project tree before running.")
+            launcher.show()
+            launcher.raise_()
             return
         ret = QMessageBox.question(
             self, "Assign compute cores",
@@ -530,8 +550,8 @@ class MainWindow(QMainWindow):
         else:
             self._logger.log_system(
                 "Skipped auto-assignment; using each task's existing Calculate Setting")
-        monitor.show()
-        monitor.raise_()
+        launcher.show()
+        launcher.raise_()
 
     def _on_stop(self):
         self._run_manager.stop_all()
@@ -541,8 +561,9 @@ class MainWindow(QMainWindow):
     # ==================== Task status / Project ====================
 
     def _on_status_clicked(self):
-        """Show the calculation status of tasks (running / issues / done)."""
-        monitor = self._ensure_run_monitor()
+        """Idle/status button: open the task monitor (progress bars, per-row
+        cancel, Run Selected / Stop All)."""
+        monitor = self._ensure_task_monitor()
         monitor.show()
         monitor.raise_()
 
@@ -560,6 +581,16 @@ class MainWindow(QMainWindow):
         else:
             self._toolbar.set_status("idle")
 
+    def _on_solver_setting(self):
+        """Open the solver path setting dialog (lazy singleton)."""
+        dlg = getattr(self, "_solver_dialog", None)
+        if dlg is None:
+            dlg = SolverSettingDialog(self)
+            dlg.set_dark_theme(self._dark_theme)
+            self._solver_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+
     def _on_task_action(self, payload: str):
         """A project-tree task node was clicked
         (calculate/particle/physics/analysis/result)."""
@@ -567,11 +598,7 @@ class MainWindow(QMainWindow):
         if action == "calculate":
             self._open_calculate_setting(rest)
         elif action == "particle":
-            self._logger.log_system(
-                f"[{rest}] Particle Setting - not wired up (see 1dRad ParticleSetupDialog)")
-            QMessageBox.information(
-                self, "Particle Setting",
-                "Particle source setup dialog not wired up.\nSee 1dRad's ParticleSetupDialog.")
+            self._open_particle_dialog(rest)
         elif action == "physics":
             self._logger.log_system(f"[{rest}] Physics Process - not wired up")
             QMessageBox.information(
@@ -597,13 +624,49 @@ class MainWindow(QMainWindow):
                 f"[{task_name}] Calculate Setting: "
                 f"{task.calculate.n_threads} threads")
 
+    def _open_particle_dialog(self, task_name: str):
+        """Double-clicking the task's "Particle Setting" node opens the GPS
+        source dialog (non-modal, cached per task)."""
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            return
+        if task.status in ("running", "queued"):
+            QMessageBox.information(
+                self, "Task Running",
+                "A task is running; particle source cannot be modified.")
+            return
+        key = ("particle", task_name)
+        dlg = self._particle_dialogs.get(key)
+        if dlg is None:
+            dlg = ParticleDialog(self, task=task,
+                                 gdml_agent=self._gdml_agent)
+            dlg.set_dark_theme(self._dark_theme)
+            dlg.destroyed.connect(
+                lambda _o, k=key: self._particle_dialogs.pop(k, None))
+            if hasattr(dlg, "close_requested"):
+                dlg.close_requested.connect(
+                    lambda k=key: self._particle_dialogs.pop(k, None))
+            self._particle_dialogs[key] = dlg
+            self._logger.log_system(
+                f"[{task_name}] particle source (GPS) dialog opened")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def on_particle_saved(self, task_name: str, configured: bool):
+        """Callback after the particle source dialog saves: mark the tree node."""
+        self._project_tree.set_particle_configured(task_name, configured)
+        self._logger.log_system(
+            f"[{task_name}] particle source saved"
+            + (" (configured)" if configured else " (empty)"))
+
     def _save_project(self):
         if not self._gdml_paths:
             QMessageBox.information(
                 self, "Nothing to Save", "Please import a GDML geometry first.")
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", "", "3dRad Project (*.json)")
+            self, "Save Project", "", "RadSim Project (*.json)")
         if not path:
             return
         tasks = []
@@ -613,6 +676,8 @@ class MainWindow(QMainWindow):
                 "analysis_type": t.analysis_type,
                 "gdml_files": t.gdml_files,
                 "calculate": {"n_threads": t.calculate.n_threads},
+                "particle": t.particle or {},
+                "physics": t.physics or {},
                 "analysis_config": t.analysis_config or {},
             })
         save_project(path, gdml_paths=self._gdml_paths, tasks=tasks)
@@ -620,7 +685,7 @@ class MainWindow(QMainWindow):
 
     def _load_project(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Project", "", "3dRad Project (*.json)")
+            self, "Load Project", "", "RadSim Project (*.json)")
         if not path:
             return
         try:
@@ -642,6 +707,8 @@ class MainWindow(QMainWindow):
                 gdml_files=td.get("gdml_files", gdml_paths),
                 analysis_type=td.get("analysis_type", ""))
             t.calculate.n_threads = td.get("calculate", {}).get("n_threads", 0)
+            t.particle = td.get("particle", {}) or {}
+            t.physics = td.get("physics", {}) or {}
             t.analysis_config = td.get("analysis_config", {}) or {}
             self._task_counter += 1
             self._run_manager.add_task(t)
@@ -653,28 +720,51 @@ class MainWindow(QMainWindow):
                 if t.analysis_config.get(k):
                     self._project_tree.set_analysis_configured(
                         t.name, label, True)
+            if t.particle:
+                self._project_tree.set_particle_configured(t.name, True)
         self._ensure_default_task()
         self._logger.log_system(
             f"Project loaded: {path} ({len(tasks)} task(s))")
 
     # ==================== Multi-task running ====================
 
-    def _ensure_run_monitor(self) -> RunMonitorDialog:
-        if self._run_monitor is None:
-            self._run_monitor = RunMonitorDialog(self)
-            self._run_monitor.set_dark_theme(self._dark_theme)
-            self._run_monitor.run_selected.connect(self._run_manager.start)
-            self._run_monitor.stop_all.connect(self._run_manager.stop_all)
+    def _ensure_run_launcher(self) -> RunMonitorDialog:
+        """Create the slim run launcher (Run toolbar button) on demand."""
+        if self._run_launcher is None:
+            self._run_launcher = RunMonitorDialog(self)
+            self._run_launcher.set_dark_theme(self._dark_theme)
+            self._run_launcher.run_selected.connect(self._run_manager.start)
             self._run_manager.task_added.connect(
-                lambda task: self._run_monitor.add_task(task.name))
+                lambda task: self._run_launcher.add_task(task.name))
             for t in self._run_manager._tasks.values():
-                self._run_monitor.add_task(t.name)
-        return self._run_monitor
+                self._run_launcher.add_task(t.name)
+            if self._run_manager.is_running_any():
+                self._run_launcher.set_busy(True)
+        return self._run_launcher
+
+    def _ensure_task_monitor(self) -> TaskMonitorDialog:
+        """Create the task monitor (Idle toolbar button) on demand."""
+        if self._task_monitor is None:
+            self._task_monitor = TaskMonitorDialog(self)
+            self._task_monitor.set_dark_theme(self._dark_theme)
+            self._task_monitor.run_selected.connect(self._run_manager.start)
+            self._task_monitor.stop_all.connect(self._run_manager.stop_all)
+            self._task_monitor.cancel_task.connect(
+                self._run_manager.stop_task)
+            self._run_manager.task_added.connect(
+                lambda task: self._task_monitor.add_task(task.name))
+            for t in self._run_manager._tasks.values():
+                self._task_monitor.add_task(t.name)
+            if self._run_manager.is_running_any():
+                self._task_monitor.set_busy(True)
+        return self._task_monitor
 
     def _sync_run_monitor_tasks(self):
-        if self._run_monitor is not None:
-            self._run_monitor.sync_tasks(
-                list(self._run_manager._tasks.keys()))
+        keys = list(self._run_manager._tasks.keys())
+        if self._run_launcher is not None:
+            self._run_launcher.sync_tasks(keys)
+        if self._task_monitor is not None:
+            self._task_monitor.sync_tasks(keys)
 
     def _ensure_default_task(self):
         """Make sure at least one default task exists (Run_001, whose calculate
@@ -764,6 +854,8 @@ class MainWindow(QMainWindow):
             if new.analysis_config.get(k):
                 self._project_tree.set_analysis_configured(
                     new.name, label, True)
+        if new.particle:
+            self._project_tree.set_particle_configured(new.name, True)
         self._sync_run_monitor_tasks()
         self._logger.log_system(f"Task duplicated: {name} → {new.name}")
 
@@ -779,6 +871,8 @@ class MainWindow(QMainWindow):
         self._project_tree.remove_task(name)
         self._analysis_dialogs = {
             k: v for k, v in self._analysis_dialogs.items() if k[0] != name}
+        self._particle_dialogs = {
+            k: v for k, v in self._particle_dialogs.items() if k[1] != name}
         self._sync_run_monitor_tasks()
         self._logger.log_system(f"Task deleted: {name}")
 
@@ -839,21 +933,26 @@ class MainWindow(QMainWindow):
         self._project_tree.set_task_status(name, "running")
         self._status_label.setText(f"Running: {name}")
         self._logger.log_system(f"[{name}] started")
-        if self._run_monitor:
-            self._run_monitor.update_task_status(name, "running", 0)
+        if self._run_launcher:
+            self._run_launcher.set_busy(True)
+            self._run_launcher.update_task_status(name, "running")
+        if self._task_monitor:
+            self._task_monitor.set_busy(True)
+            self._task_monitor.update_task_status(name, "running", 0)
         self._update_status_button()
 
     def _on_task_progress(self, name: str, percent: int):
-        if self._run_monitor:
-            self._run_monitor.update_task_status(name, "running", percent)
+        if self._task_monitor:
+            self._task_monitor.update_task_status(name, "running", percent)
 
     def _on_task_finished(self, name: str, status: str):
         task = self._run_manager.get_task(name)
         run_time = task.run_time if task else ""
-        if self._run_monitor:
-            pct = 100 if status == "completed" else (task.progress if task else 0)
-            self._run_monitor.update_task_status(name, status, pct, run_time)
-            self._run_monitor.append_log(f"[{status}] {name} ({run_time})")
+        pct = 100 if status == "completed" else (task.progress if task else 0)
+        if self._run_launcher:
+            self._run_launcher.update_task_status(name, status, pct, run_time)
+        if self._task_monitor:
+            self._task_monitor.update_task_status(name, status, pct, run_time)
         self._logger.log_system(f"[{name}] {status} ({run_time})")
         self._project_tree.set_task_status(name, status)
         if status == "completed":
@@ -863,6 +962,10 @@ class MainWindow(QMainWindow):
 
     def _on_all_finished(self):
         self._toolbar.set_running(False)
+        if self._run_launcher:
+            self._run_launcher.set_busy(False)
+        if self._task_monitor:
+            self._task_monitor.set_busy(False)
         self._status_label.setText("All tasks finished")
         self._logger.log_system("All tasks finished")
         self._toolbar.set_status("done")
@@ -898,8 +1001,8 @@ class MainWindow(QMainWindow):
                                 f"Result viewer not wired up yet: {ref}")
 
     def _on_help(self):
-        QMessageBox.about(self, "About 3dRad",
-            "3dRad v0.1.0\n\n"
+        QMessageBox.about(self, "About RadSim",
+            "RadSim v0.1.0\n\n"
             "3D Radiation Simulation GUI for rad4space solver.\n\n"
             "Supported:\n"
             "  · GDML geometry import & render (box/sphere/tube/cone/tessellated...)\n"
