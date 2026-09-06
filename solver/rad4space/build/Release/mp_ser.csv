@@ -1,7 +1,0 @@
-# mesh name: Probes
-# primitive scorer name: eDep
-# i, i, i, total(value) [MeV], total(val^2), entry
-0,0,0,9065.390040918774,866101.6876571288,100
-# primitive scorer name: volFlux
-# i, i, i, total(value) [NoUnit], total(val^2), entry
-0,0,0,100,100,100
