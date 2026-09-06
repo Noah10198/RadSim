@@ -1,7 +1,0 @@
-# mesh name: vOrigin
-# primitive scorer name: eDep
-# i, i, i, total(value) [MeV], total(val^2), entry
-0,0,0,5457.741093500336,36842.34385001366,1000
-# primitive scorer name: volFlux
-# i, i, i, total(value) [NoUnit], total(val^2), entry
-0,0,0,1000,1000,1000
