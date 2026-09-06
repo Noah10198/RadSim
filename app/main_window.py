@@ -34,6 +34,7 @@ from ui.dialogs.realworld_dialog import RealWorldDialog
 from ui.dialogs.probe_dialog import ProbeDialog
 from ui.dialogs.voxel_dialog import VoxelDialog
 from ui.dialogs.particle_dialog import ParticleDialog
+from ui.dialogs.physics_dialog import PhysicsDialog
 
 
 # Parse GDML above this size (bytes) on a background thread to keep the main
@@ -600,9 +601,7 @@ class MainWindow(QMainWindow):
         elif action == "particle":
             self._open_particle_dialog(rest)
         elif action == "physics":
-            self._logger.log_system(f"[{rest}] Physics Process - not wired up")
-            QMessageBox.information(
-                self, "Physics Process", "Physics process setup dialog not wired up.")
+            self._open_physics_dialog(rest)
         elif action == "analysis":
             task_name, _, kind = rest.partition(":")
             self._open_analysis_dialog(task_name, kind)
@@ -652,6 +651,26 @@ class MainWindow(QMainWindow):
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
+
+    def _open_physics_dialog(self, task_name: str):
+        """Double-clicking the task's "Physics Process" node opens the physics
+        settings dialog (modal); saving marks the tree node configured."""
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            return
+        if task.status in ("running", "queued"):
+            QMessageBox.information(
+                self, "Task Running",
+                "A task is running; the physics process cannot be modified.")
+            return
+        dlg = PhysicsDialog(self, task_name=task_name, config=task.physics)
+        dlg.set_dark_theme(self._dark_theme)
+        if dlg.exec():
+            task.physics = dlg.get_config()
+            self._project_tree.set_physics_configured(task_name, True)
+            self._logger.log_system(
+                f"[{task_name}] Physics Process saved: "
+                f"{task.physics.get('physics_list')}")
 
     def on_particle_saved(self, task_name: str, configured: bool):
         """Callback after the particle source dialog saves: mark the tree node."""
@@ -722,6 +741,8 @@ class MainWindow(QMainWindow):
                         t.name, label, True)
             if t.particle:
                 self._project_tree.set_particle_configured(t.name, True)
+            if t.physics:
+                self._project_tree.set_physics_configured(t.name, True)
         self._ensure_default_task()
         self._logger.log_system(
             f"Project loaded: {path} ({len(tasks)} task(s))")
@@ -856,6 +877,8 @@ class MainWindow(QMainWindow):
                     new.name, label, True)
         if new.particle:
             self._project_tree.set_particle_configured(new.name, True)
+        if new.physics:
+            self._project_tree.set_physics_configured(new.name, True)
         self._sync_run_monitor_tasks()
         self._logger.log_system(f"Task duplicated: {name} → {new.name}")
 

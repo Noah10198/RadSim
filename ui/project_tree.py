@@ -385,6 +385,19 @@ class ProjectTreeWidget(QWidget):
                 child.setForeground(0, fg)
                 break
 
+    def set_physics_configured(self, task_name: str, configured: bool):
+        """Mark the task's "Physics Process" child as configured (green)."""
+        item = self._find_task_item(task_name)
+        if item is None:
+            return
+        for i in range(item.childCount()):
+            child = item.child(i)
+            act = child.data(0, TASK_ACTION_ROLE) or ""
+            if act.startswith("physics:"):
+                fg = QColor("#2e7d32") if configured else QColor("#888888")
+                child.setForeground(0, fg)
+                break
+
     def clear_tasks(self):
         self._tasks_root.takeChildren()
 
