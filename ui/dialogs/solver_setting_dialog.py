@@ -1,9 +1,9 @@
 """
-SolverSettingDialog - configure the path of the solver executable.
+SolverSettingDialog - configure the solver executable and its Qt runtime.
 
-Non-modal dialog opened by the "Solver Setting" toolbar button. The path is
-persisted through QSettings (see core/solver_config.py); when left empty the
-dialog falls back to the automatically detected repository path.
+Non-modal dialog opened by the "Solver Setting" toolbar button. Both paths are
+persisted through QSettings (see core/solver_config.py); when left empty they
+fall back to the automatically detected repository / Qt6 paths.
 """
 
 import os
@@ -14,7 +14,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from core.solver_config import get_solver_path, set_solver_path
+from core.solver_config import (
+    get_qt_bin_dir, get_solver_path, set_qt_bin_dir, set_solver_path)
 
 
 class SolverSettingDialog(QDialog):
@@ -54,10 +55,35 @@ class SolverSettingDialog(QDialog):
         self._info.setStyleSheet("color: #888888; font-size: 11px;")
         layout.addWidget(self._info)
 
+        qt_title = QLabel("Qt runtime bin (optional)")
+        qt_title.setStyleSheet("font-size: 13px; font-weight: bold;")
+        qt_title.setToolTip(
+            "The solver is a Geant4 app linking the Qt6 DLLs of the Qt it was "
+            "built against. When the GUI runs from a conda python, its older "
+            "Qt DLLs hijack the solver and it exits with 0xC0000135/0xC0000139. "
+            "Point here to the machine-wide Qt bin that matches the solver.")
+        layout.addWidget(qt_title)
+
+        qt_row = QHBoxLayout()
+        self._qt_edit = QLineEdit()
+        self._qt_edit.setText(get_qt_bin_dir())
+        self._qt_edit.setPlaceholderText("…\\msvc2022_64\\bin (Qt6 DLLs)")
+        qt_row.addWidget(self._qt_edit, 1)
+
+        qt_browse_btn = QPushButton("Browse…")
+        qt_browse_btn.clicked.connect(self._on_browse_qt)
+        qt_row.addWidget(qt_browse_btn)
+        layout.addLayout(qt_row)
+
+        self._qt_info = QLabel("")
+        self._qt_info.setWordWrap(True)
+        self._qt_info.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addWidget(self._qt_info)
+
         note = QLabel(
-            "The solver is invoked per task as:\n"
-            "    <solver> <task script> [thread count]\n"
-            "The executable name / final location may still change later.")
+            "Empty fields fall back to the auto-detected paths. Publishing "
+            "tip: copy the solver's Qt/Geant4 DLLs next to rad4space.exe and "
+            "this Qt setting becomes unnecessary.")
         note.setStyleSheet("color: #6c7086; font-size: 11px;")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -74,6 +100,7 @@ class SolverSettingDialog(QDialog):
         layout.addLayout(btns)
 
         self._path_edit.textChanged.connect(self._update_info)
+        self._qt_edit.textChanged.connect(self._update_info)
         self._update_info()
 
     def _on_browse(self):
@@ -86,6 +113,13 @@ class SolverSettingDialog(QDialog):
         if path:
             self._path_edit.setText(path)
 
+    def _on_browse_qt(self):
+        path = QFileDialog.getExistingDirectory(
+            self, "Select the Qt runtime (bin) directory",
+            self._qt_edit.text() or os.path.expanduser("~"))
+        if path:
+            self._qt_edit.setText(path)
+
     def _update_info(self):
         path = self._path_edit.text().strip()
         if path and os.path.isfile(path):
@@ -97,8 +131,23 @@ class SolverSettingDialog(QDialog):
                 "Empty: falls back to the automatically detected path under "
                 "solver/rad4space/build.")
 
+        qt = self._qt_edit.text().strip()
+        if qt:
+            if os.path.isdir(qt) and os.path.isfile(
+                    os.path.join(qt, "Qt6Core.dll")):
+                self._qt_info.setText("✓ Qt6Core.dll found here")
+            elif os.path.isdir(qt):
+                self._qt_info.setText("Directory exists (Qt6Core.dll not in it).")
+            else:
+                self._qt_info.setText("Directory not found yet.")
+        else:
+            self._qt_info.setText(
+                "Empty: falls back to the auto-detected Qt6 bin. Set it when "
+                "the solver links another Qt than this GUI's python.")
+
     def _save(self):
         set_solver_path(self._path_edit.text().strip())
+        set_qt_bin_dir(self._qt_edit.text())
         self.close()
 
     def set_dark_theme(self, dark: bool):

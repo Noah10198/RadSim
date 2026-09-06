@@ -41,3 +41,8 @@ class RunTask:
     status: str = "idle"
     progress: int = 0
     run_time: str = ""
+
+    # Absolute path of the solver console log (run.log) of the latest run.
+    # Set by the run manager while a real solver process is active; never
+    # persisted (project save uses an explicit field whitelist).
+    run_log: str = ""

@@ -308,13 +308,19 @@ class ProjectTreeWidget(QWidget):
         item.setText(0, f"{emoji} {base}".strip())
 
     def add_task_result(self, task_name: str, label: str):
-        """Attach a computation result under the task's Results child node."""
+        """Attach a computation result under the task's Results child node.
+        Re-running a task refreshes an existing item with the same label
+        instead of stacking duplicates."""
         item = self._find_task_item(task_name)
         if item is None:
             return
         results = self._find_child(item, "Results")
         if results is None:
             return
+        for i in range(results.childCount()):
+            if results.child(i).text(0) == label:
+                results.removeChild(results.child(i))
+                break
         res_item = QTreeWidgetItem(results, [label])
         res_item.setData(0, TASK_ACTION_ROLE, f"result:{task_name}:{label}")
         res_item.setData(0, TASK_CTX_ROLE, CTX_RESULT)

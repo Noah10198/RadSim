@@ -16,6 +16,7 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QMainWindow, QTextEdit, QSplitter, QLabel, QFileDialog,
     QMessageBox, QDockWidget, QToolBar, QStackedWidget, QApplication,
+    QDialog, QPlainTextEdit, QPushButton, QHBoxLayout, QVBoxLayout,
 )
 from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal
 from PyQt6.QtGui import QPalette, QColor, QFont
@@ -23,10 +24,13 @@ from PyQt6.QtGui import QPalette, QColor, QFont
 from core.gdml_agent import GdmlAgent
 from core.project_io import save_project, load_project
 from core.run_manager import RunManager, RunTask
+from core.mac_builder import DEFAULT_EVENTS
+from core.solver_config import get_solver_path
 from utils.logger import AsyncLogger, LogLevel
 from ui.ribbon_toolbar import RibbonToolBar
 from ui.project_tree import ProjectTreeWidget
 from ui.vtk_widget import VtkWidget
+from ui.mac_preview import MacPreviewDock
 from ui.dialogs.run_monitor import RunMonitorDialog, TaskMonitorDialog
 from ui.dialogs.calculate_setting_dialog import CalculateSettingDialog
 from ui.dialogs.solver_setting_dialog import SolverSettingDialog
@@ -40,6 +44,77 @@ from ui.dialogs.physics_dialog import PhysicsDialog
 # Parse GDML above this size (bytes) on a background thread to keep the main
 # window responsive (same approach as gdmleditor)
 _LARGE_FILE_THRESHOLD = 500_000
+
+# Output root for each run: out_root/<task>/run.mac + result csvs. Points at the
+# repo's solver/runs folder (sibling of the solver sources).
+_RUNS_ROOT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "solver", "runs")
+
+
+class _LogViewerDialog(QDialog):
+    """Read-only viewer for a task's run.log (the solver console output that
+    RunManager redirected to <work>/run.log). Opened by double-clicking the
+    "run log" node under a task's Results."""
+
+    _MAX_BYTES = 2 * 1024 * 1024  # cap huge solver logs
+
+    def __init__(self, title: str, path: str, dark: bool = False,
+                 parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(860, 600)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        self._edit = QPlainTextEdit()
+        self._edit.setReadOnly(True)
+        self._edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(self._edit, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+
+        self._load(path)
+        self.set_dark_theme(dark)
+
+    def _load(self, path: str) -> None:
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            self._edit.setPlainText(f"[log file unavailable: {path}]")
+            return
+        truncated = size > self._MAX_BYTES
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read(self._MAX_BYTES) if truncated else f.read()
+        except OSError as e:
+            self._edit.setPlainText(f"[cannot read {path}: {e}]")
+            return
+        if truncated:
+            text += (f"\n\n… [truncated: showing the first "
+                     f"{self._MAX_BYTES // 1024} KB of {size // 1024} KB]")
+        self._edit.setPlainText(text)
+
+    def set_dark_theme(self, dark: bool) -> None:
+        if dark:
+            self._edit.setStyleSheet(
+                "QPlainTextEdit { background-color: #11111b; color: #cdd6f4;"
+                " font-family: \"Consolas\", \"Courier New\", monospace;"
+                " font-size: 12px; border: 1px solid #313244;"
+                " border-radius: 4px; padding: 4px;"
+                " selection-background-color: #45475a; }")
+        else:
+            self._edit.setStyleSheet(
+                "QPlainTextEdit { background-color: #fafafa; color: #1f2328;"
+                " font-family: \"Consolas\", \"Courier New\", monospace;"
+                " font-size: 12px; border: 1px solid #d0d0d0;"
+                " border-radius: 4px; padding: 4px;"
+                " selection-background-color: #cde5ff; }")
 
 
 class _ImportWorker(QObject):
@@ -101,6 +176,7 @@ class MainWindow(QMainWindow):
         self._pending_gdml_error = ""    # reason the background parse failed
 
         # Multi-task running (queue + concurrency cap; see core/run_manager.py)
+        # NOTE: run_manager signals are connected in _connect_signals().
         self._run_manager = RunManager(max_concurrent=2)
         self._run_launcher: Optional[RunMonitorDialog] = None
         self._task_monitor: Optional[TaskMonitorDialog] = None
@@ -108,6 +184,8 @@ class MainWindow(QMainWindow):
         self._gdml_paths: list[str] = []  # real paths of imported GDML (for project save)
         self._analysis_dialogs: dict[tuple, object] = {}  # (task, kind) -> dialog
         self._particle_dialogs: dict[tuple, object] = {}  # ("particle", task) -> dialog
+        self._physics_dialogs: dict[tuple, object] = {}   # ("physics", task) -> dialog
+        self._calculate_dialogs: dict[tuple, object] = {} # ("calculate", task) -> dialog
 
         self._init_toolbar()
         self._init_project_tree()
@@ -115,6 +193,7 @@ class MainWindow(QMainWindow):
         self._init_vtk_widget()
         self._init_log_panel()
         self._init_layout()
+        self._init_mac_preview()
         self._init_status_bar()
 
         self._apply_global_theme(False)  # light theme by default
@@ -199,6 +278,8 @@ class MainWindow(QMainWindow):
         self._project_tree.set_dark_theme(dark)
         if self._vtk_widget is not None:
             self._vtk_widget.set_dark_theme(dark)
+        if getattr(self, "_mac_preview", None) is not None:
+            self._mac_preview.set_dark_theme(dark)
 
     def _toggle_theme(self):
         self._apply_global_theme(not self._dark_theme)
@@ -215,6 +296,16 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         for dlg in self._particle_dialogs.values():
+            try:
+                dlg.set_dark_theme(self._dark_theme)
+            except Exception:
+                pass
+        for dlg in self._physics_dialogs.values():
+            try:
+                dlg.set_dark_theme(self._dark_theme)
+            except Exception:
+                pass
+        for dlg in self._calculate_dialogs.values():
             try:
                 dlg.set_dark_theme(self._dark_theme)
             except Exception:
@@ -288,6 +379,81 @@ class MainWindow(QMainWindow):
         self._status_label = QLabel("Ready")
         self.statusBar().addPermanentWidget(self._status_label)
 
+    # ==================== Run macro preview (right dock) ====================
+
+    def _init_mac_preview(self):
+        """Right dock: live run.mac preview for the task picked in its header
+        combo. The text is rendered by core.mac_builder.build_mac_text() - the
+        exact same function used to write each task's run.mac before the
+        solver launches - so what you see is what gets run."""
+        self._mac_preview: Optional[MacPreviewDock] = None
+        self._mac_dock = QDockWidget("Run Macro Preview", self)
+        self._mac_preview = MacPreviewDock()
+        self._mac_dock.setWidget(self._mac_preview)
+        self._mac_dock.setMinimumWidth(300)
+        self._mac_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable |
+            QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,
+                           self._mac_dock)
+        self.resizeDocks([self._tree_dock, self._mac_dock], [280, 340],
+                         Qt.Orientation.Horizontal)
+        self._mac_preview.task_changed.connect(self._render_mac_preview)
+
+    def _render_mac_preview(self, task_name: str):
+        """Re-render the preview panel for one task from build_mac_text()."""
+        if self._mac_preview is None:
+            return
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            self._mac_preview.set_placeholder(f"No task '{task_name}'.")
+            return
+        if not self._gdml_paths:
+            self._mac_preview.set_placeholder(
+                "No geometry loaded.\n\n"
+                "Import a GDML first - the run.mac embeds the absolute "
+                "GDML path that rad4space reads before the run starts.")
+            return
+        from core.mac_builder import build_mac_text
+        try:
+            text = build_mac_text(self._gdml_paths[0], task)
+        except Exception as e:  # a config typo must not crash the main window
+            self._mac_preview.set_placeholder(f"Failed to build run.mac: {e}")
+            return
+        self._mac_preview.set_text(text)
+
+    def _refresh_mac_preview(self, task_name: str = ""):
+        """Refresh the preview. With task_name it switches the combo to that
+        task first; without one it re-renders the currently selected task
+        (falling back to the first available task)."""
+        if self._mac_preview is None:
+            return
+        if task_name:
+            self._mac_preview.select_task(task_name)
+            return
+        name = self._mac_preview.current_task()
+        if name:
+            self._render_mac_preview(name)
+            return
+        tasks = list(self._run_manager._tasks.values())
+        if tasks:
+            self._mac_preview.select_task(tasks[0].name)
+        else:
+            self._mac_preview.set_placeholder(
+                "No run tasks yet.\n\n"
+                "Right-click \"Tasks\" in the project tree to add one, then "
+                "configure its Particle/Physics/Analysis nodes - the generated "
+                "run.mac appears here.")
+
+    def _sync_mac_preview_tasks(self):
+        """Resync the preview task list after tasks were added/removed/
+        renamed (keeps the current selection when it still exists)."""
+        if self._mac_preview is None:
+            return
+        names = list(self._run_manager._tasks.keys())
+        self._mac_preview.sync_tasks(names)
+        self._refresh_mac_preview()
+
     # ==================== Signals ====================
 
     def _connect_signals(self):
@@ -360,9 +526,18 @@ class MainWindow(QMainWindow):
                                 f"Failed to import:\n{msg}")
             return False
         self._gdml_paths = [filepath]
+        self._refresh_solver()
         self._rebuild_ui()
         self._check_unsupported_solids()
         return True
+
+    def _refresh_solver(self):
+        """Push the current geometry + solver executable into the run manager
+        so tasks launch the REAL rad4space process. Until a GDML is present the
+        manager stays in simulated mode (its fallback)."""
+        gdml = self._gdml_paths[0] if self._gdml_paths else None
+        exe = get_solver_path() if gdml else None
+        self._run_manager.configure_solver(exe, gdml, _RUNS_ROOT)
 
     # ---- Large-file background parsing (ported from gdmleditor) ----
 
@@ -432,6 +607,7 @@ class MainWindow(QMainWindow):
             self._gdml_agent.clear()
             self._gdml_agent.add_parsed_file_node(node)
             self._gdml_paths = [filepath]
+            self._refresh_solver()
             self._rebuild_ui(progress)
             self._ensure_default_task()
         finally:
@@ -609,19 +785,39 @@ class MainWindow(QMainWindow):
             self._on_result_activated(rest)
 
     def _open_calculate_setting(self, task_name: str):
+        """Double-clicking the task's "Calculate Setting" node opens the thread
+        count dialog (non-modal, cached per task - mirrors ParticleDialog)."""
         task = self._run_manager.get_task(task_name)
         if task is None:
             return
-        dlg = CalculateSettingDialog(
-            self, task_name, task.calculate.n_threads)
-        dlg.set_dark_theme(self._dark_theme)
-        if dlg.exec():
-            task.calculate.n_threads = dlg.get_n_threads()
-            self._project_tree.update_task_threads(
-                task_name, task.calculate.n_threads)
+        if task.status in ("running", "queued"):
+            QMessageBox.information(
+                self, "Task Running",
+                "A task is running; the calculate setting cannot be modified.")
+            return
+        self._refresh_mac_preview(task_name)
+        key = ("calculate", task_name)
+        dlg = self._calculate_dialogs.get(key)
+        if dlg is None or getattr(dlg, "_task", None) is not task:
+            # A cached dialog may still hold a stale task object after the
+            # tasks were rebuilt (import GDML / load project). Close it and
+            # rebuild so the spin box and the save both target the CURRENT
+            # task object - otherwise edits appear to do nothing.
+            if dlg is not None:
+                dlg.close()
+            dlg = CalculateSettingDialog(self, task=task)
+            dlg.set_dark_theme(self._dark_theme)
+            dlg.destroyed.connect(
+                lambda _o, k=key: self._calculate_dialogs.pop(k, None))
+            if hasattr(dlg, "close_requested"):
+                dlg.close_requested.connect(
+                    lambda k=key: self._calculate_dialogs.pop(k, None))
+            self._calculate_dialogs[key] = dlg
             self._logger.log_system(
-                f"[{task_name}] Calculate Setting: "
-                f"{task.calculate.n_threads} threads")
+                f"[{task_name}] calculate setting dialog opened")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _open_particle_dialog(self, task_name: str):
         """Double-clicking the task's "Particle Setting" node opens the GPS
@@ -634,6 +830,7 @@ class MainWindow(QMainWindow):
                 self, "Task Running",
                 "A task is running; particle source cannot be modified.")
             return
+        self._refresh_mac_preview(task_name)
         key = ("particle", task_name)
         dlg = self._particle_dialogs.get(key)
         if dlg is None:
@@ -654,7 +851,8 @@ class MainWindow(QMainWindow):
 
     def _open_physics_dialog(self, task_name: str):
         """Double-clicking the task's "Physics Process" node opens the physics
-        settings dialog (modal); saving marks the tree node configured."""
+        settings dialog (non-modal, cached per task - mirrors ParticleDialog);
+        saving writes task.physics and marks the tree node configured."""
         task = self._run_manager.get_task(task_name)
         if task is None:
             return
@@ -663,14 +861,33 @@ class MainWindow(QMainWindow):
                 self, "Task Running",
                 "A task is running; the physics process cannot be modified.")
             return
-        dlg = PhysicsDialog(self, task_name=task_name, config=task.physics)
-        dlg.set_dark_theme(self._dark_theme)
-        if dlg.exec():
-            task.physics = dlg.get_config()
-            self._project_tree.set_physics_configured(task_name, True)
+        self._refresh_mac_preview(task_name)
+        key = ("physics", task_name)
+        dlg = self._physics_dialogs.get(key)
+        if dlg is None:
+            dlg = PhysicsDialog(self, task=task)
+            dlg.set_dark_theme(self._dark_theme)
+            dlg.destroyed.connect(
+                lambda _o, k=key: self._physics_dialogs.pop(k, None))
+            if hasattr(dlg, "close_requested"):
+                dlg.close_requested.connect(
+                    lambda k=key: self._physics_dialogs.pop(k, None))
+            self._physics_dialogs[key] = dlg
             self._logger.log_system(
-                f"[{task_name}] Physics Process saved: "
-                f"{task.physics.get('physics_list')}")
+                f"[{task_name}] physics process dialog opened")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def on_physics_saved(self, task_name: str, configured: bool):
+        """Callback after the physics process dialog saves: mark the tree node."""
+        self._project_tree.set_physics_configured(task_name, configured)
+        task = self._run_manager.get_task(task_name)
+        pl = (task.physics.get("physics_list") if task is not None
+              and task.physics else "")
+        self._logger.log_system(
+            f"[{task_name}] Physics Process saved: {pl}")
+        self._refresh_mac_preview(task_name)
 
     def on_particle_saved(self, task_name: str, configured: bool):
         """Callback after the particle source dialog saves: mark the tree node."""
@@ -678,6 +895,22 @@ class MainWindow(QMainWindow):
         self._logger.log_system(
             f"[{task_name}] particle source saved"
             + (" (configured)" if configured else " (empty)"))
+        self._refresh_mac_preview(task_name)
+
+    def on_calculate_saved(self, task_name: str, configured: bool):
+        """Callback after the calculate setting dialog saves: refresh the task's
+        thread count in the tree node."""
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            return
+        self._project_tree.update_task_threads(
+            task_name, task.calculate.n_threads)
+        events = task.calculate.n_events or DEFAULT_EVENTS
+        self._logger.log_system(
+            f"[{task_name}] Calculate Setting: "
+            f"{task.calculate.n_threads} threads, "
+            f"{events} events (beamOn)")
+        self._refresh_mac_preview(task_name)
 
     def _save_project(self):
         if not self._gdml_paths:
@@ -694,7 +927,8 @@ class MainWindow(QMainWindow):
                 "name": t.name,
                 "analysis_type": t.analysis_type,
                 "gdml_files": t.gdml_files,
-                "calculate": {"n_threads": t.calculate.n_threads},
+                "calculate": {"n_threads": t.calculate.n_threads,
+                              "n_events": t.calculate.n_events},
                 "particle": t.particle or {},
                 "physics": t.physics or {},
                 "analysis_config": t.analysis_config or {},
@@ -726,6 +960,7 @@ class MainWindow(QMainWindow):
                 gdml_files=td.get("gdml_files", gdml_paths),
                 analysis_type=td.get("analysis_type", ""))
             t.calculate.n_threads = td.get("calculate", {}).get("n_threads", 0)
+            t.calculate.n_events = td.get("calculate", {}).get("n_events", 0)
             t.particle = td.get("particle", {}) or {}
             t.physics = td.get("physics", {}) or {}
             t.analysis_config = td.get("analysis_config", {}) or {}
@@ -744,6 +979,7 @@ class MainWindow(QMainWindow):
             if t.physics:
                 self._project_tree.set_physics_configured(t.name, True)
         self._ensure_default_task()
+        self._sync_mac_preview_tasks()
         self._logger.log_system(
             f"Project loaded: {path} ({len(tasks)} task(s))")
 
@@ -801,6 +1037,7 @@ class MainWindow(QMainWindow):
         self._run_manager.add_task(task)
         self._project_tree.add_task(
             task.name, task.analysis_type, task.calculate.n_threads)
+        self._sync_mac_preview_tasks()
 
     def _add_default_run_task(self):
         """Add a new task (right-click Tasks -> Add Task). Importing a GDML is
@@ -815,6 +1052,7 @@ class MainWindow(QMainWindow):
             task.name, task.analysis_type, task.calculate.n_threads)
         self._logger.log_system(
             f"Task added: {task.name} ({', '.join(files) or 'no geometry'})")
+        self._sync_mac_preview_tasks()
 
     # ==================== Task context menu / analysis dialog ====================
 
@@ -854,6 +1092,11 @@ class MainWindow(QMainWindow):
         self._run_manager._tasks[new_name] = task
         self._project_tree.rename_task(old_name, new_name)
         self._sync_run_monitor_tasks()
+        was_previewed = self._mac_preview is not None and \
+            self._mac_preview.current_task() == old_name
+        self._sync_mac_preview_tasks()
+        if was_previewed:
+            self._refresh_mac_preview(new_name)
         self._logger.log_system(f"Task renamed: {old_name} → {new_name}")
 
     def _duplicate_task(self, name: str):
@@ -880,6 +1123,7 @@ class MainWindow(QMainWindow):
         if new.physics:
             self._project_tree.set_physics_configured(new.name, True)
         self._sync_run_monitor_tasks()
+        self._sync_mac_preview_tasks()
         self._logger.log_system(f"Task duplicated: {name} → {new.name}")
 
     def _delete_task(self, name: str):
@@ -896,7 +1140,12 @@ class MainWindow(QMainWindow):
             k: v for k, v in self._analysis_dialogs.items() if k[0] != name}
         self._particle_dialogs = {
             k: v for k, v in self._particle_dialogs.items() if k[1] != name}
+        self._physics_dialogs = {
+            k: v for k, v in self._physics_dialogs.items() if k[1] != name}
+        self._calculate_dialogs = {
+            k: v for k, v in self._calculate_dialogs.items() if k[1] != name}
         self._sync_run_monitor_tasks()
+        self._sync_mac_preview_tasks()
         self._logger.log_system(f"Task deleted: {name}")
 
     def _open_analysis_dialog(self, task_name: str, kind: str):
@@ -911,8 +1160,9 @@ class MainWindow(QMainWindow):
             return
         if task.status in ("running", "queued"):
             QMessageBox.information(
-                self, "Task Running", "A task is running; analysis config cannot be modified.")
+                self, "Task Running",                 "A task is running; analysis config cannot be modified.")
             return
+        self._refresh_mac_preview(task_name)
         key = (task_name, kind)
         dlg = self._analysis_dialogs.get(key)
         if dlg is None:
@@ -950,6 +1200,7 @@ class MainWindow(QMainWindow):
         self._logger.log_system(
             f"[{task_name}] {kind_label} config saved"
             + (" (configured)" if configured else " (empty)"))
+        self._refresh_mac_preview(task_name)
 
     def _on_task_started(self, name: str):
         self._toolbar.set_running(True)
@@ -978,6 +1229,9 @@ class MainWindow(QMainWindow):
             self._task_monitor.update_task_status(name, status, pct, run_time)
         self._logger.log_system(f"[{name}] {status} ({run_time})")
         self._project_tree.set_task_status(name, status)
+        if task and task.run_log and os.path.isfile(task.run_log):
+            # a real solver run happened -> expose its console log under Results
+            self._project_tree.add_task_result(name, "run log")
         if status == "completed":
             label = (task.analysis_type or "default") + " result"
             self._project_tree.add_task_result(name, label)
@@ -1018,10 +1272,25 @@ class MainWindow(QMainWindow):
         self._on_node_selected(entry_id)
 
     def _on_result_activated(self, ref: str):
-        # ref looks like "Run_001:energy spectrum volFlux" or ":TID summary"
+        # ref looks like "Run_001:run log" or "Run_001:<analysis> result"
+        task_name, _, label = ref.partition(":")
+        if label == "run log":
+            task = self._run_manager.get_task(task_name)
+            if task and task.run_log and os.path.isfile(task.run_log):
+                self._open_run_log(task_name, task.run_log)
+                return
         self._logger.log_system(f"Opening result: {ref} - viewer planned")
         QMessageBox.information(self, "Result Viewer",
                                 f"Result viewer not wired up yet: {ref}")
+
+    def _open_run_log(self, task_name: str, path: str) -> None:
+        """Open the task's run.log in a read-only text viewer."""
+        dlg = _LogViewerDialog(f"{task_name} - run.log", path,
+                               dark=self._dark_theme, parent=self)
+        self._logger.log_system(f"Opening run log: {path}")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _on_help(self):
         QMessageBox.about(self, "About RadSim",
