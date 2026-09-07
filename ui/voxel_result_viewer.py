@@ -10,10 +10,16 @@ marker, and a colourbar in the bottom-right corner.
 CSV rows carry (iX, iY, iZ, value) with iZ varying fastest (Geant4 score
 semantics). The physical grid is built from the voxel config center / half
 (mm), the same convention the mac-builder run macros use, so the overlay sits
-in the geometry's own coordinate frame (mm).
+in the geometry's own coordinate frame (mm). The field is sampled on the cell
+*boundary* lattice (nbin+1 points per axis at spacing 2h/n starting at
+center-half, with the edge cell value copied onto both envelope faces) so the
+coloured extent spans exactly center +/- half - no half-cell inset.
 """
 
+import os
+
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QSlider, QButtonGroup, QWidget,
@@ -43,6 +49,37 @@ _TYPE_UNITS = {  # colorbar unit fallback when the quantity carries none
     "trackLength": "cm",
     "hitCount": "count",
 }
+
+
+def _edge_boundary_lattice(values, nbin):
+    """Resample per-cell data onto an exact-fill *boundary* lattice.
+
+    Geant4 cell k on an axis of n cells occupies
+    [center-half + k*s, center-half + (k+1)*s] with s = 2*half/n. Sampling at
+    the n cell centres (origin = center-half + s/2) draws the volume only
+    between the centres - a half-cell gap at every envelope face. Instead put
+    one sample on every cell *boundary*: n+1 points at the same spacing s,
+    starting at center-half, each holding the value of the cell immediately to
+    its right (the rightmost point repeats the last cell's value). The image
+    then spans exactly center +/- half, so the coloured extent fills the whole
+    envelope with no inset and no overshoot.
+
+    values: flat per-cell data, x fastest (vtk order), len nx*ny*nz.
+    nbin:   (nx, ny, nz) cell counts.
+    Returns flat boundary-lattice point data, x fastest, len (nx+1)*(ny+1)*(nz+1).
+    """
+    nx, ny, nz = nbin
+    nx2, ny2, nz2 = nx + 1, ny + 1, nz + 1
+    out = [0.0] * (nx2 * ny2 * nz2)
+    for oz in range(nz2):
+        src_z = nx * ny * min(oz, nz - 1)
+        dst_z = nx2 * ny2 * oz
+        for oy in range(ny2):
+            src_row = src_z + nx * min(oy, ny - 1)
+            dst_row = dst_z + nx2 * oy
+            for ox in range(nx2):
+                out[dst_row + ox] = values[src_row + min(ox, nx - 1)]
+    return out
 
 
 class VoxelFieldWidget(VtkWidget):
@@ -80,7 +117,7 @@ class VoxelFieldWidget(VtkWidget):
         layout.addWidget(self._vtk_interactor, 1)
 
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(4)
+        toolbar.setSpacing(6)
 
         # Order follows the main-window toolbar subset (Clip, Fit, Ortho,
         # then the X / Y / Z axis views) - all contiguous from the left.
@@ -88,18 +125,18 @@ class VoxelFieldWidget(VtkWidget):
         self._btn_clip.setCheckable(True)
         self._btn_clip.setToolTip("Cut geometry to reveal the field inside")
         self._btn_clip.clicked.connect(self._toggle_clip_panel)
-        toolbar.addWidget(self._btn_clip)
+        toolbar.addWidget(self._btn_clip, 1)
 
         fit = QPushButton("Fit All")
         fit.setToolTip("Fit the whole scene")
         fit.clicked.connect(self._fit_all)
-        toolbar.addWidget(fit)
+        toolbar.addWidget(fit, 1)
 
         self._btn_proj = QPushButton("Ortho")
         self._btn_proj.setCheckable(True)
         self._btn_proj.setToolTip("Toggle orthographic / perspective")
         self._btn_proj.clicked.connect(self._toggle_projection)
-        toolbar.addWidget(self._btn_proj)
+        toolbar.addWidget(self._btn_proj, 1)
 
         self._axis_group = QButtonGroup(self)
         self._axis_group.setExclusive(True)
@@ -108,12 +145,20 @@ class VoxelFieldWidget(VtkWidget):
             btn.setCheckable(True)
             btn.setToolTip(f"View from +{label} axis")
             btn.clicked.connect(lambda _c, a=axis: self._set_axis_view(a))
-            toolbar.addWidget(btn)
+            toolbar.addWidget(btn, 1)
             self._axis_group.addButton(btn)
 
+        # Taller buttons; the equal stretch factors above make the left block
+        # grow with the window instead of hugging the left edge.
+        for w in (self._btn_clip, fit, self._btn_proj,
+                  *self._axis_group.buttons()):
+            w.setMinimumHeight(30)
+
         # Field-volume opacity (right side): 100% = fully solid, 90% = the
-        # default "nearly opaque" look the result window opens with.
-        toolbar.addStretch(1)
+        # default "nearly opaque" look the result window opens with. The
+        # trailing spacer matches the six button weights so the buttons take
+        # about half of the window width.
+        toolbar.addStretch(6)
         op_label = QLabel("Opacity")
         toolbar.addWidget(op_label)
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
@@ -158,6 +203,26 @@ class VoxelFieldWidget(VtkWidget):
         self._clip_panel.setVisible(False)
         layout.addWidget(self._clip_panel)
         self._apply_toolbar_style(True)
+        self._style_sliders()
+
+    def _style_sliders(self):
+        """Theme the Opacity / Clip sliders so they do not stay light on the
+        dark toolbar row (the base widget deliberately keeps the OS slider)."""
+        dark = self._is_dark
+        groove = "#3a3a4e" if dark else "#d8d8d8"
+        fill = "#7a8bd0" if dark else "#4a6aa8"
+        ss = f"""
+        QSlider::groove:horizontal {{ height: 4px; background: {groove};
+            border-radius: 2px; }}
+        QSlider::sub-page:horizontal {{ background: {fill}; border-radius: 2px; }}
+        QSlider::add-page:horizontal {{ background: {groove}; border-radius: 2px; }}
+        QSlider::handle:horizontal {{ width: 14px; margin: -5px 0;
+            background: {fill}; border-radius: 7px; }}
+        """
+        for s in (getattr(self, "_opacity_slider", None),
+                  getattr(self, "_clip_slider", None)):
+            if s is not None:
+                s.setStyleSheet(ss)
 
     def set_geometry_ghost(self, on: bool = True, opacity: float = 0.14,
                            wireframe: bool = False):
@@ -174,7 +239,10 @@ class VoxelFieldWidget(VtkWidget):
                 p.SetRepresentationToWireframe()
                 p.SetColor(0.78, 0.82, 0.86)
                 p.SetOpacity(1.0)
-                p.SetLineWidth(1.0)
+                # 2px: 1px hairline lines alias into scattered white dots while
+                # rotating (MSAA is off); a slightly wider line rasterises to a
+                # continuous stroke instead of breaking into points.
+                p.SetLineWidth(2.0)
                 p.SetAmbient(1.0)
                 p.SetDiffuse(0.0)
                 p.SetSpecular(0.0)
@@ -216,8 +284,10 @@ class VoxelFieldWidget(VtkWidget):
                   vmin, vmax, title, unit=""):
         """Render values as an interpolated translucent volume.
 
-        shape=(nx,ny,nz); origin = mm pos of voxel (0,0,0) centre; spacing =
-        mm per voxel; vmin/vmax = colour range.
+        shape=(nx,ny,nz) = sample counts per axis (the exact-fill boundary
+        lattice: nbin+1 per axis); origin = mm position of the first sample,
+        i.e. the low corner of the envelope (center-half); spacing = mm per
+        sample; vmin/vmax = colour range.
         """
         nx, ny, nz = (int(shape[0]), int(shape[1]), int(shape[2]))
         total = nx * ny * nz
@@ -431,6 +501,7 @@ class VoxelFieldWidget(VtkWidget):
     def set_dark_theme(self, is_dark: bool):
         self._is_dark = is_dark
         super().set_dark_theme(is_dark)
+        self._style_sliders()
         self._update_axes_marker()
         self._style_colorbar()
         self.render()
@@ -452,10 +523,19 @@ class VoxelResultViewer(QDialog):
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._dark = dark
         self._quantity = quantity or {}
+        # Snapshot taken at load time; refresh_if_changed() uses it to detect
+        # that the task was re-run and the CSV (and/or voxel config) changed.
+        self._vcfg = vcfg
+        self._csv_path = csv_path
+        self._csv_stamp = self._file_stamp(csv_path)
         self._view = VoxelFieldWidget(self)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        # 0 spacing so the path bar sits flush against the 3D area: with any
+        # gap the plain (unthemed) QDialog background showed through as a
+        # white horizontal band in dark mode.
+        lay.setSpacing(0)
         self._status = QLabel("Loading voxel result ...")
         self._status.setContentsMargins(8, 4, 8, 4)
         lay.addWidget(self._status)
@@ -473,6 +553,40 @@ class VoxelResultViewer(QDialog):
             self._status.setText(
                 f"Could not read voxel output:\n{csv_path}\n\n"
                 "Check that the file exists and matches the voxel config binning.")
+
+    # ── refresh after a re-run ──
+    @staticmethod
+    def _file_stamp(path: str):
+        """(mtime_ns, size) identity of a CSV. Re-runs are detected even when
+        the file is rewritten inside the same filesystem timestamp tick."""
+        try:
+            st = os.stat(path)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    def refresh_if_changed(self, vcfg: dict, csv_path: str) -> bool:
+        """Reload the field in place when the CSV or the voxel config changed
+        since this window was built.
+
+        Re-running a task overwrites out_Box_*.csv in the same run directory,
+        so a preview opened before the re-run would otherwise keep showing the
+        previous run's field. Returns True when a reload actually happened.
+        """
+        if (csv_path == self._csv_path and vcfg == self._vcfg
+                and self._file_stamp(csv_path) == self._csv_stamp):
+            return False
+        self._vcfg = vcfg
+        self._csv_path = csv_path
+        self._status.setText("Reloading voxel result ...")
+        ok = self._load_and_show_field(vcfg, csv_path)
+        if ok:
+            self._csv_stamp = self._file_stamp(csv_path)
+        else:
+            self._status.setText(
+                f"Could not read voxel output:\n{csv_path}\n\n"
+                "Check that the file exists and matches the voxel config binning.")
+        return ok
 
     # ── data loading ──
     def _load_and_show_field(self, vcfg: dict, csv_path: str) -> bool:
@@ -518,13 +632,18 @@ class VoxelResultViewer(QDialog):
         if rows == 0:
             return False
 
-        # field grid: origin = center of voxel (0,0,0)
+        # Field grid = the exact-fill boundary lattice: one sample per cell
+        # boundary, dims = nbin+1 per axis, origin = the envelope's low corner
+        # (center-half). The coloured extent then covers center +/- half
+        # exactly - no half-cell inset (cell-centre sampling) nor overshoot.
         spacing = [2.0 * half[i] / nbin[i] for i in range(3)]
-        origin = [center[i] - half[i] + 0.5 * spacing[i] for i in range(3)]
+        origin = [center[i] - half[i] for i in range(3)]
+        grid = _edge_boundary_lattice(vals, nbin)
+        grid_shape = [n + 1 for n in nbin]
 
         qtype = str(self._quantity.get("type") or "")
         self._view.set_field(
-            vals, nbin, origin, spacing, 0.0, vmax,
+            grid, grid_shape, origin, spacing, 0.0, vmax,
             title=qtype or "quantity", unit=_TYPE_UNITS.get(qtype, ""))
         # Re-apply the clip plane to the just-created volume mapper if the
         # Slice tool is already active.
@@ -539,8 +658,18 @@ class VoxelResultViewer(QDialog):
         self._dark = dark
         bg = "#1a1a24" if dark else "#f2f2f2"
         fg = "#e0e0e0" if dark else "#222222"
+        line = "#33334a" if dark else "#c8c8d0"
+        # Paint every not-covered strip of the dialog (toolbar row gaps,
+        # edges) with the theme colour instead of the unthemed light default.
+        # A palette (not a stylesheet) is used so Qt's style engine is never
+        # activated over the native VTK child window (see vtk_view_window).
+        pal = self.palette()
+        pal.setColor(QPalette.ColorRole.Window, QColor(bg))
+        self.setPalette(pal)
+        self.setAutoFillBackground(True)
         self._status.setStyleSheet(
-            f"background:{bg}; color:{fg}; font-size:12px;")
+            f"background:{bg}; color:{fg}; font-size:12px;"
+            f"border-bottom:1px solid {line};")
         if hasattr(self, "_view"):
             self._view.set_dark_theme(dark)
             self._view.set_geometry_ghost(True, wireframe=True)
@@ -549,6 +678,15 @@ class VoxelResultViewer(QDialog):
         # Release the orientation marker before the GL context is destroyed
         try:
             self._view._disable_axes_marker()
+        except Exception:
+            pass
+        # Release the VTK GL context while the widget is still alive. If this
+        # dialog outlives the main window (user closes the main window first)
+        # and no cleanup runs, the legacy QVTKRenderWindowInteractor keeps a
+        # render loop on a destroyed HDC and spams
+        # "vtkWin32OpenGLRenderWindow: wglMakeCurrent failed".
+        try:
+            self._view.cleanup()
         except Exception:
             pass
         super().closeEvent(event)

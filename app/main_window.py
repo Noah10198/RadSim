@@ -24,7 +24,7 @@ from PyQt6.QtGui import QPalette, QColor, QFont
 from core.gdml_agent import GdmlAgent
 from core.project_io import save_project, load_project
 from core.run_manager import RunManager, RunTask
-from core.mac_builder import DEFAULT_EVENTS, active_kind
+from core.mac_builder import DEFAULT_EVENTS, active_kinds
 from core.solver_config import get_solver_path
 from utils.logger import AsyncLogger, LogLevel
 from ui.ribbon_toolbar import RibbonToolBar
@@ -41,6 +41,8 @@ from ui.dialogs.particle_dialog import ParticleDialog
 from ui.dialogs.physics_dialog import PhysicsDialog
 from ui.dialogs.result_viewer import ResultViewerDialog
 from ui.voxel_result_viewer import VoxelResultViewer
+from ui.probe_result_viewer import build_probe_result_groups, find_group
+from ui.probe_chart_dialog import ProbeResultChartDialog
 
 
 # Parse GDML above this size (bytes) on a background thread to keep the main
@@ -1249,6 +1251,9 @@ class MainWindow(QMainWindow):
             # saved analysis config, so a finished voxel run can never leave a
             # stale "default result" leaf (and vice versa) behind.
             self._refresh_task_results(name, task)
+            # Any preview window that stayed open across the run must switch to
+            # the freshly dumped CSV instead of the previous run's field.
+            self._refresh_open_voxel_previews(name, task)
         elif task and task.run_log and os.path.isfile(task.run_log):
             # failed / stopped run: keep any earlier results, just surface the
             # console log if the solver wrote one
@@ -1261,32 +1266,147 @@ class MainWindow(QMainWindow):
         Every entry is first removed, then re-added from what the run directory
         actually contains, so re-running a task (or restoring it after loading
         a project) can never stack a "default result" leaf next to a "voxel
-        result" group or leave an outdated one behind."""
+        result" group or leave an outdated one behind.
+
+        A task may configure several analyses at once (probe + voxel, ...),
+        which the generated run.mac scores together in one beamOn; each
+        configured kind gets its own result entry, but only when its dump
+        files really exist on disk."""
         self._project_tree.clear_task_results(name)
         work = self._result_work_dir(task)
         if work and os.path.isfile(os.path.join(work, "run.log")):
             self._project_tree.add_task_result(name, "run log")
-        kind = active_kind(task.analysis_config) if task else None
-        if kind == "voxel":
-            self._add_voxel_result_group(name, task)
+        if task is None:
             return
-        # A run may have dumped out_Box_*.csv even when the saved config no
-        # longer carries its quantity list (e.g. a project saved between
-        # configuration and run). Keep it under a plain "voxel result" instead
-        # of mislabelling the scoring output as "default result".
-        has_box_output = False
-        if work:
-            try:
-                has_box_output = any(
-                    n.startswith("out_Box_") and n.endswith(".csv")
-                    for n in os.listdir(work))
-            except OSError:
-                has_box_output = False
-        if has_box_output:
+        kinds = active_kinds(task.analysis_config or {})
+        if not kinds:
+            # No analysis config in memory: fall back to what the run dir
+            # actually contains (old project / config cleared after a run).
+            self._add_disk_only_results(name, task, work)
+            return
+        labels = {"realworld": "real world", "probe": "probe"}
+        for kind in kinds:
+            if kind == "voxel":
+                self._add_voxel_result_group(name, task)
+                continue
+            if kind == "probe":
+                if self._kind_dump_exists(work, task, kind):
+                    self._add_probe_result_group(name, task)
+                continue
+            if self._kind_dump_exists(work, task, kind):
+                label = labels.get(kind, kind) + " result"
+                self._project_tree.add_task_result(name, label)
+
+    def _run_csv_names(self, work) -> list:
+        """out_*.csv scoring dumps found in the task run dir ([] when absent
+        or unreadable)."""
+        if not work:
+            return []
+        try:
+            return [n for n in os.listdir(work)
+                    if n.startswith("out_") and n.endswith(".csv")]
+        except OSError:
+            return []
+
+    def _kind_dump_exists(self, work, task, kind) -> bool:
+        """True when the run dir holds a dump produced by this configured
+        kind. Real world volumes dump out_<LV>.csv and probes out_<name>.csv,
+        so a probe config never claims a voxel out_Box_*.csv (or vice versa)."""
+        csvs = self._run_csv_names(work)
+        if not csvs:
+            return False
+        cfg = (task.analysis_config or {}).get(kind) or {}
+        if kind == "probe":
+            names = [str(p.get("name") or "").strip()
+                     for p in (cfg.get("probes") or [])
+                     if str(p.get("name") or "").strip()]
+        elif kind == "realworld":
+            names = [str(lv) for lv in (cfg.get("volumes") or {})]
+        else:
+            return bool(csvs)
+        for n in csvs:
+            stem = n[len("out_"):]
+            if any(stem == f"{nm}.csv" or stem.startswith(f"{nm}_")
+                   for nm in names if nm):
+                return True
+        return False
+
+    def _add_disk_only_results(self, name: str, task, work) -> None:
+        """Results entries when the task carries no analysis config but the run
+        dir still has scoring output (old project / config cleared after the
+        run). out_Box_* keeps the "voxel result" label; anything else falls
+        back to a single "<analysis> result" leaf."""
+        csvs = self._run_csv_names(work)
+        if not csvs:
+            return
+        if any(n.startswith("out_Box_") and n.endswith(".csv")
+               for n in csvs):
             self._project_tree.add_task_result(name, "voxel result")
             return
         label = ((task.analysis_type if task else None) or "default") + " result"
         self._project_tree.add_task_result(name, label)
+
+    def _add_probe_result_group(self, name: str, task) -> None:
+        """Expose probe results as comparison charts instead of raw tables:
+
+            probe result
+            ├── quantity                # one chart leaf per quantity type
+            │   └── doseDeposit [Gy]    # bar chart: P1, P2, ... side by side
+            └── histogram               # one chart leaf per histogram type
+                └── doseDeposit [Gy]    # overlaid step curves across probes
+
+        Groups are built from the saved probe config + the dump files actually
+        present in the run dir (out_<probe>.csv, rad4space_h1_<probe>_<q>.csv).
+        When a probe dump exists but nothing parses into a group (e.g. the
+        probe config was edited after the run) a plain "probe result" leaf is
+        kept so the generic file viewer stays reachable."""
+        pcfg = ((task.analysis_config or {}).get("probe") or {})
+        work = self._result_work_dir(task)
+        if work is None:
+            self._project_tree.add_task_result(name, "probe result")
+            return
+        groups = build_probe_result_groups(pcfg.get("probes") or [], work)
+        children = []
+        q_nodes = [("leaf", g["label"], f"result:{name}:pq:{g['label']}")
+                   for g in groups["quantity"]]
+        h_nodes = [("leaf", g["label"], f"result:{name}:ph:{g['label']}")
+                   for g in groups["histogram"]]
+        if q_nodes:
+            children.append(("group", "quantity", q_nodes))
+        if h_nodes:
+            children.append(("group", "histogram", h_nodes))
+        if not children:
+            self._project_tree.add_task_result(name, "probe result")
+            return
+        # A probe run supersedes an earlier plain "default result" leaf.
+        self._project_tree.remove_task_result(name, "default result")
+        self._project_tree.add_task_result_tree(name, "probe result", children)
+        self._logger.log_system(
+            f"[{name}] probe result ready: "
+            + ", ".join(f"{t} ({len(n)})" for _k, t, n in children))
+
+    def _refresh_open_voxel_previews(self, task_name: str, task) -> None:
+        """Reload still-open voxel previews of a just-finished task.
+
+        Re-running a task overwrites its out_Box_*.csv files in place, so a
+        preview window that stayed open across the run would otherwise keep
+        showing the previous run's field until it is closed and reopened."""
+        if not self._voxel_viewers:
+            return
+        vcfg = ((task.analysis_config or {}).get("voxel") or {})
+        work = self._result_work_dir(task)
+        if not work:
+            return
+        for key, dlg in list(self._voxel_viewers.items()):
+            if key[0] != task_name:
+                continue
+            csv_path = os.path.join(work, f"out_Box_{key[1]}.csv")
+            try:
+                if dlg.refresh_if_changed(vcfg, csv_path):
+                    self._logger.log_system(
+                        f"[{task_name}] voxel preview auto-reloaded: {key[1]}")
+            except Exception:
+                pass
 
     def _restore_task_outputs(self, task) -> None:
         """After loading a saved project, detect runs that already finished on
@@ -1366,6 +1486,9 @@ class MainWindow(QMainWindow):
         if label.startswith("q:"):
             self._open_voxel_result(task_name, label[2:])
             return
+        if label.startswith("pq:") or label.startswith("ph:"):
+            self._open_probe_result_chart(task_name, label)
+            return
         task = self._run_manager.get_task(task_name)
         if label == "run log":
             if task and task.run_log and os.path.isfile(task.run_log):
@@ -1403,9 +1526,15 @@ class MainWindow(QMainWindow):
 
     def _add_voxel_result_group(self, name: str, task) -> None:
         """Expose each voxel quantity of a finished task under one 'voxel
-        result' group; double-clicking a quantity opens its own preview."""
+        result' group; double-clicking a quantity opens its own preview.
+
+        Only quantities whose out_Box_<q>.csv actually exists on disk are
+        listed. A simulated / failed run writes no dumps, so showing a group
+        (or a bare "voxel result" placeholder) without files would only offer
+        dead-end previews."""
         vcfg = ((task.analysis_config or {}).get("voxel") or {})
         qs = vcfg.get("qs") or []
+        work = self._result_work_dir(task)
         children = []
         seen: set = set()  # type: ignore[reportMissingTypeArgument]
         for q in qs:
@@ -1413,11 +1542,20 @@ class MainWindow(QMainWindow):
             qtype = str(q.get("type") or qname).strip()
             if not qname:
                 continue
+            if work is None or not os.path.isfile(
+                    os.path.join(work, f"out_Box_{qname}.csv")):
+                continue
             label = qtype if qtype not in seen else f"{qtype} ({qname})"
             seen.add(qtype)
             children.append((label, f"result:{name}:q:{qname}"))
         if not children:
-            self._project_tree.add_task_result(name, "voxel result")
+            # No per-quantity dump found. Keep a plain "voxel result" leaf only
+            # when the run really dumped out_Box_* files whose names no longer
+            # match the saved quantity list (e.g. a quantity removed after the
+            # run); a simulated / failed run leaves nothing at all.
+            if any(n.startswith("out_Box_") and n.endswith(".csv")
+                   for n in self._run_csv_names(work)):
+                self._project_tree.add_task_result(name, "voxel result")
             return
         # A voxel run supersedes any earlier plain "default result" leaf (and a
         # leaf "voxel result" from an empty-q run), so drop those before adding
@@ -1428,6 +1566,40 @@ class MainWindow(QMainWindow):
         self._logger.log_system(
             f"[{name}] voxel result ready: "
             + ", ".join(c[0] for c in children))
+
+    def _open_probe_result_chart(self, task_name: str, label: str) -> None:
+        """Open one probe comparison chart. label is either
+        'pq:<quantity-type label>' or 'ph:<histogram-type label>' - it names
+        the chart group by the exact label text shown on the tree leaf."""
+        kind = "quantity" if label.startswith("pq:") else "histogram"
+        payload = label.split(":", 1)[1]
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            return
+        pcfg = ((task.analysis_config or {}).get("probe") or {})
+        work = self._result_work_dir(task)
+        if work is None:
+            QMessageBox.information(
+                self, "Probe Result",
+                f"No solver output directory found for '{task_name}'.")
+            return
+        groups = build_probe_result_groups(pcfg.get("probes") or [], work)
+        grp = find_group(groups, kind, payload)
+        if grp is None:
+            QMessageBox.information(
+                self, "Probe Result",
+                f"No {kind} group '{payload}' found for '{task_name}'.\n\n"
+                "The dump files in the run directory may no longer match the "
+                "saved probe configuration.")
+            return
+        dlg = ProbeResultChartDialog(
+            f"Probe {kind} - {task_name} ({payload})", grp,
+            dark=self._dark_theme, parent=self)
+        self._logger.log_system(
+            f"[{task_name}] opening probe {kind} chart: {payload}")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
 
     def _open_voxel_result(self, task_name: str, qname: str) -> None:
         task = self._run_manager.get_task(task_name)
@@ -1458,7 +1630,17 @@ class MainWindow(QMainWindow):
             return
         key = (task_name, qname)
         dlg = self._voxel_viewers.get(key)
-        if dlg is None:
+        if dlg is not None:
+            # A cached window opened before the task was re-run still holds the
+            # previous run's field (out_Box_*.csv is overwritten in place), so
+            # reload it when the CSV stamp or the voxel config changed.
+            try:
+                if dlg.refresh_if_changed(vcfg, csv_path):
+                    self._logger.log_system(
+                        f"[{task_name}] voxel quantity preview reloaded: {qname}")
+            except Exception:
+                pass
+        else:
             dlg = VoxelResultViewer(
                 title=f"{qname} - {task_name}", root_node=root,
                 vcfg=vcfg, csv_path=csv_path, quantity=q,
@@ -1511,7 +1693,62 @@ class MainWindow(QMainWindow):
     def get_system_log_widget(self):
         return self._log_widget
 
+    def _visible_secondary_windows(self):
+        """Currently-open top-level windows other than the main window
+        (voxel-result previews, run monitor, result/log viewers, ...)."""
+        windows = []
+        for w in QApplication.topLevelWidgets():
+            if w is self or not w.isVisible():
+                continue
+            if w.windowType() in (Qt.WindowType.Popup, Qt.WindowType.ToolTip,
+                                  Qt.WindowType.Tool):
+                continue
+            windows.append(w)
+        return windows
+
+    def _has_saveable_content(self) -> bool:
+        return bool(self._gdml_paths) or bool(
+            getattr(self._run_manager, "_tasks", None))
+
     def closeEvent(self, event):
+        # A second closeEvent can arrive while the first is still tearing the
+        # session down; never ask twice.
+        if getattr(self, "_closing", False):
+            super().closeEvent(event)
+            return
+        # ── interactive exit confirmation (never during OS session end) ──
+        if not event.spontaneous():
+            secondary = self._visible_secondary_windows()
+            if secondary or self._has_saveable_content():
+                if secondary:
+                    text = (
+                        f"{len(secondary)} preview/result window(s) are still "
+                        "open.\n\nClosing the main window will close them as "
+                        "well. Make sure the project is saved (Save Project) "
+                        "before exiting.\n\nReally exit RadSim?")
+                else:
+                    text = ("Any unsaved project changes will be lost.\n\n"
+                            "Make sure the project is saved (Save Project) "
+                            "before exiting.\n\nReally exit RadSim?")
+                ret = QMessageBox.question(
+                    self, "Exit RadSim", text,
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No)
+                if ret != QMessageBox.StandardButton.Yes:
+                    event.ignore()
+                    return
+        self._closing = True
+        # Close every open secondary window first: each releases its own VTK
+        # GL context while the main window's context is still alive. Leaving a
+        # QVTK window alive past the main window (dead HDC/context) is exactly
+        # what floods the log with
+        # "vtkWin32OpenGLRenderWindow: wglMakeCurrent failed".
+        for w in self._visible_secondary_windows():
+            try:
+                w.close()
+            except Exception:
+                pass
         # On close: if a background parse is still running, request exit and
         # wait for the thread to finish
         if self._import_worker:

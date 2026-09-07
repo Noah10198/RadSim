@@ -381,6 +381,43 @@ class ProjectTreeWidget(QWidget):
         results.setExpanded(True)
         item.setExpanded(True)
 
+    def add_task_result_tree(self, task_name: str, root_label: str,
+                             children) -> None:
+        """Attach a NESTED result tree under the task's Results child: a root
+        node (root_label) whose children can recursively be groups or leaves.
+        A node is ('group', text, children) or ('leaf', text, action) -
+        leaves carry the action payload, groups only the right-click context
+        role. A tree with the same root label is refreshed instead of
+        stacked, exactly like add_task_result_group."""
+        item = self._find_task_item(task_name)
+        if item is None:
+            return
+        results = self._find_child(item, "Results")
+        if results is None:
+            return
+        for i in range(results.childCount()):
+            if results.child(i).text(0) == root_label:
+                results.removeChild(results.child(i))
+                break
+        root = QTreeWidgetItem(results, [root_label])
+        root.setData(0, TASK_CTX_ROLE, CTX_RESULT)
+
+        def _fill(parent, nodes):
+            for node in nodes:
+                kind, text = node[0], node[1]
+                child = QTreeWidgetItem(parent, [text])
+                child.setData(0, TASK_CTX_ROLE, CTX_RESULT)
+                if kind == "group":
+                    child.setExpanded(True)
+                    _fill(child, node[2])
+                else:
+                    child.setData(0, TASK_ACTION_ROLE, node[2])
+
+        _fill(root, children)
+        root.setExpanded(True)
+        results.setExpanded(True)
+        item.setExpanded(True)
+
     def remove_task(self, task_name: str) -> bool:
         item = self._find_task_item(task_name)
         if item is None:

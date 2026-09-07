@@ -30,8 +30,10 @@ Units: the GUI stores lengths in mm; the solver expects cm (/10 everywhere).
 import os
 
 
-# analysis_config key (CONFIG_KEY) -> human label, in precedence order when the
-# user has configured more than one (normally only one is active per task).
+# analysis_config key (CONFIG_KEY) -> human label, in precedence order used by
+# active_kind() for a canonical label. Run.mac generation emits EVERY
+# configured kind (active_kinds()), so several analyses can be scored together
+# in the same /run/beamOn.
 KINDS = [
     ("realworld", "real world"),
     ("probe", "probe"),
@@ -54,9 +56,9 @@ _HIST_XUNIT = {
     "nOfCollision": None, "nOfTerminatedTrack": None, "population": None,
 }
 
-# Beam events used when CalculateSetting.n_events is unset (0). 4000 matches
+# Beam events used when CalculateSetting.n_events is unset (0). 10000 matches
 # the rad4space example macro, giving a small but non-trivial result per run.
-DEFAULT_EVENTS = 4000
+DEFAULT_EVENTS = 10000
 
 # "active" means the config carries at least one configured quantity.
 def _kind_is_active(analysis_config, key) -> bool:
@@ -72,14 +74,25 @@ def _kind_is_active(analysis_config, key) -> bool:
     return False
 
 
+def active_kinds(analysis_config) -> list:
+    """Every analysis kind that carries at least one configured quantity, in
+    KINDS order (realworld > probe > voxel).
+
+    A task may configure several analyses at once - probe and voxel, for
+    example. Each such mesh is an independent scorer, so rad4space can score
+    them all inside the SAME /run/beamOn: this list drives scoring_block() to
+    emit every configured mesh instead of silently keeping only one."""
+    return [key for key, _label in KINDS
+            if _kind_is_active(analysis_config, key)]
+
+
 def active_kind(analysis_config) -> str | None:
-    """The analysis kind that is actually configured, or None if none is.  If
-    several are configured we take the first (realworld > probe > voxel) so the
-    run still works, mirroring the analysis-type precedence used by the tree."""
-    for key, _label in KINDS:
-        if _kind_is_active(analysis_config, key):
-            return key
-    return None
+    """The single analysis kind a run would be described by (the highest in
+    precedence among the configured ones), or None if none is configured.
+    Kept for callers that need one canonical label; macro generation uses
+    active_kinds() so several analyses are never dropped."""
+    kinds = active_kinds(analysis_config)
+    return kinds[0] if kinds else None
 
 
 # ----------------------------------------------------------------------
@@ -151,77 +164,87 @@ def _dump_line(kind, mesh, qs):
 #              - dumping before the run writes an all-zero file
 # build_mac_text() emits setup -> /run/beamOn -> dumps in that order.
 
-def _scoring_realworld(volumes):
+def _scoring_realworld(volumes, id_state):
     """volumes: { LVname : {"qs":[...], "hs":[...]} }
-    Returns (setup_lines, dump_lines)."""
-    setup, h1, fill, dumps = [], [], [], []
-    id_state = {"n": 0}
+    Returns (setup_lines, dump_lines). setup_lines is a FLAT list of macro
+    lines: each configured logical volume opens with a blank line + a
+    '# ...' comment and is immediately followed by its OWN 1-D histogram /
+    fill1D lines, so every scoring block stays readable on its own.
+    id_state is the shared 1-D histogram id counter across the whole run
+    (ids are global for G4TScoreHistFiller)."""
+    setup, dumps = [], []
     for lv, cfg in (volumes or {}).items():
         if not (cfg.get("qs") or cfg.get("hs")):
             continue
         mesh = lv  # mesh name == logical volume name for realWorldLogVol
-        block = [f"/score/create/realWorldLogVol {mesh}"]
-        block += _quantity_lines(cfg.get("qs"))
-        block.append("/score/close")
-        _h1, _f = _histogram_lines(mesh, cfg.get("qs"), cfg.get("hs"), id_state)
-        h1 += _h1
-        fill += _f
+        setup.append("")
+        setup.append(f"# real world volume scorer: {mesh}")
+        setup.append(f"/score/create/realWorldLogVol {mesh}")
+        setup += _quantity_lines(cfg.get("qs"))
+        setup.append("/score/close")
+        h1, fill = _histogram_lines(mesh, cfg.get("qs"), cfg.get("hs"),
+                                    id_state)
+        setup += h1
+        setup += fill
         dumps += _dump_line("realworld", mesh, cfg.get("qs"))
-        setup.append("\n".join(block))
-    setup += h1
-    setup += fill
     return setup, dumps
 
 
-def _scoring_probe(probes):
-    """Returns (setup_lines, dump_lines)."""
-    setup, h1, fill, dumps = [], [], [], []
-    id_state = {"n": 0}
+def _scoring_probe(probes, id_state):
+    """Returns (setup_lines, dump_lines). setup_lines is a FLAT list of macro
+    lines: each configured probe opens with a blank line + a '# ...' comment
+    and is immediately followed by its OWN 1-D histogram / fill1D lines.
+    id_state is the shared 1-D histogram id counter across the whole run (ids
+    are global for G4TScoreHistFiller)."""
+    setup, dumps = [], []
     for p in (probes or []):
         if not (p.get("qs") or p.get("hs")):
             continue
         name = p.get("name", "P")
-        block = [f"/score/create/probe {name} {_num(p.get('half', 50.0) / 10)} cm"]
+        setup.append("")
+        setup.append(f"# probe scorer: {name}")
+        setup.append(
+            f"/score/create/probe {name} {_num(p.get('half', 50.0) / 10)} cm")
         mat = p.get("material")
         if mat and mat != "none":
             # Material override: overwrites the geometry material inside the
             # probe cube (manual 4.9.4, listing 4.31).
-            block.append(f"/score/probe/material {mat}")
-        block.append(f"/score/probe/locate {_num(p.get('x', 0) / 10)} "
+            setup.append(f"/score/probe/material {mat}")
+        setup.append(f"/score/probe/locate {_num(p.get('x', 0) / 10)} "
                      f"{_num(p.get('y', 0) / 10)} {_num(p.get('z', 0) / 10)} cm")
-        block += _quantity_lines(p.get("qs"))
-        block.append("/score/close")
-        _h1, _f = _histogram_lines(name, p.get("qs"), p.get("hs"), id_state)
-        h1 += _h1
-        fill += _f
+        setup += _quantity_lines(p.get("qs"))
+        setup.append("/score/close")
+        h1, fill = _histogram_lines(name, p.get("qs"), p.get("hs"), id_state)
+        setup += h1
+        setup += fill
         dumps += _dump_line("probe", name, p.get("qs"))
-        setup.append("\n".join(block))
-    setup += h1
-    setup += fill
     return setup, dumps
 
 
 def _scoring_voxel(vcfg):
-    """Returns (setup_lines, dump_lines)."""
+    """Returns (setup_lines, dump_lines). setup_lines is a FLAT list of macro
+    lines opening with a blank line + a '# ...' comment (boxMesh has no 1-D
+    histogram support; each quantity is dumped to its own csv)."""
     half = vcfg.get("half", [50.0, 50.0, 50.0])
     nbin = vcfg.get("nbin", [10, 10, 10])
     center = vcfg.get("center", [0.0, 0.0, 0.0])
     qs = vcfg.get("qs", [])
     mesh = "Box"
-    # Geant4 scoring: /score/mesh/boxSize takes the HALF lengths of the box
-    # mesh, not the full width (Geant4 manual: boxSize 100 100 100 cm yields
-    # an overall 2 m x 2 m x 2 m mesh). half[] here is the true half extent in
-    # mm, so pass half/10 cm - doubling it would make the scored volume 2x
-    # larger than the GUI enclosure.
-    setup = [f"/score/create/boxMesh {mesh}\n"
-             f"/score/mesh/boxSize {_num(half[0] / 10)} "
-             f"{_num(half[1] / 10)} {_num(half[2] / 10)} cm\n"
-             f"/score/mesh/nBin {int(nbin[0])} {int(nbin[1])} {int(nbin[2])}\n"
-             f"/score/mesh/translate/xyz {_num(center[0] / 10)} "
-             f"{_num(center[1] / 10)} {_num(center[2] / 10)} cm\n"
-             + "\n".join(_quantity_lines(qs))
-             + "\n/score/close"]
-    # boxMesh has no 1-D histogram support; dump each quantity to its own csv
+    setup = [
+        "",
+        "# voxel (boxMesh) scoring: 3-D grid over the scored geometry",
+        f"/score/create/boxMesh {mesh}",
+        # Geant4 /score/mesh/boxSize takes the HALF lengths of the box mesh,
+        # not the full width; half[] is the true half extent in mm -> /10 cm.
+        "# /score/mesh/boxSize takes the HALF extents of the box (mm -> cm)",
+        f"/score/mesh/boxSize {_num(half[0] / 10)} "
+        f"{_num(half[1] / 10)} {_num(half[2] / 10)} cm",
+        f"/score/mesh/nBin {int(nbin[0])} {int(nbin[1])} {int(nbin[2])}",
+        f"/score/mesh/translate/xyz {_num(center[0] / 10)} "
+        f"{_num(center[1] / 10)} {_num(center[2] / 10)} cm",
+    ]
+    setup += _quantity_lines(qs)
+    setup.append("/score/close")
     dumps = [f"/score/dumpQuantityToFile {mesh} {q.get('name', 'q')} "
              f"out_{mesh}_{q.get('name', 'q')}.csv" for q in (qs or [])]
     return setup, dumps
@@ -232,20 +255,38 @@ def _scoring_voxel(vcfg):
 # ----------------------------------------------------------------------
 
 def scoring_block(analysis_config):
-    """Scoring macro for the active kind. Returns (setup_lines, dump_lines):
-    setup goes before /run/beamOn (mesh + histogram creation), dumps go after
-    it (see header comment above). Returns two empty lists when no analysis
-    is configured."""
-    kind = active_kind(analysis_config)
-    if kind is None:
-        return (["# (no analysis configured for this task - no scoring mesh)"],
+    """Scoring macro for ALL configured analysis kinds, one scorer mesh block
+    per kind (realworld volumes, probes and/or the voxel boxMesh) so e.g. a
+    probe + voxel run scores both meshes in the same /run/beamOn.
+
+    Returns (setup_lines, dump_lines): setup goes before /run/beamOn (mesh +
+    histogram creation), dumps go after it (see header comment above). Returns
+    a comment + empty dumps when no analysis is configured. Histogram ids are
+    assigned from ONE shared counter because G4TScoreHistFiller numbers h1
+    meshes globally in creation order across the whole run."""
+    kinds = active_kinds(analysis_config)
+    if not kinds:
+        # Blank line + comment so the source section above stays separated.
+        return (["", "# (no analysis configured for this task - no scoring "
+                     "mesh)"],
                 [])
-    cfg = analysis_config.get(kind) or {}
-    if kind == "realworld":
-        return _scoring_realworld(cfg.get("volumes") or {})
-    if kind == "probe":
-        return _scoring_probe(cfg.get("probes") or [])
-    return _scoring_voxel(cfg)
+    setup, dumps, id_state = [], [], {"n": 0}
+    labels = dict(KINDS)
+    for kind in kinds:
+        cfg = analysis_config.get(kind) or {}
+        if kind == "realworld":
+            s, d = _scoring_realworld(cfg.get("volumes") or {}, id_state)
+        elif kind == "probe":
+            s, d = _scoring_probe(cfg.get("probes") or [], id_state)
+        else:
+            s, d = _scoring_voxel(cfg)
+        setup += s
+        if d:
+            # A '#' comment before each analysis kind's dump block, so the
+            # outputs of several analyses are easy to tell apart.
+            dumps.append(f"# {labels.get(kind, kind)} output")
+            dumps += d
+    return setup, dumps
 
 
 def build_mac_text(gdml_full_path: str, task) -> str:
@@ -263,7 +304,7 @@ def build_mac_text(gdml_full_path: str, task) -> str:
     n_threads = int(getattr(task.calculate, "n_threads", 0) or 0)
 
     # 1. verbosity
-    lines = ["/control/saveHistory"]
+    lines = ["# run control and verbosity", "/control/saveHistory"]
     if n_threads > 0:
         lines.append(f"/run/numberOfThreads {n_threads}")
     lines += [
@@ -273,36 +314,35 @@ def build_mac_text(gdml_full_path: str, task) -> str:
         "/tracking/verbose 0",
     ]
     # 2. geometry (PreInit)
-    lines.append("")
-    lines.append(f"/rad4space/gdml/SetGDMLFile {gdml_full_path}")
+    lines += ["", "# geometry setting",
+              f"/rad4space/gdml/SetGDMLFile {gdml_full_path}"]
     # 3. physics (PreInit)
-    lines.append("")
+    lines += ["", "# physics setting"]
     lines += pcfg.macro_lines(task.physics)
     # 4. initialize (options freeze here)
-    lines.append("")
-    lines.append("/rad4space/initialize")
+    lines += ["", "# initialize (run options are frozen from this point)",
+              "/rad4space/initialize"]
     # 5. primary source
-    lines.append("")
+    lines += ["", "# primary particle source"]
     src_lines = gps.macro_lines(task.particle or {})
     lines += (src_lines if src_lines else ["# (no particle source configured)"])
     # 6. scoring - only the mesh / histogram setup goes here; the dump
     # commands must follow /run/beamOn (section 8) or they write zero files.
-    lines.append("")
+    # scoring_block() already starts each analysis block with a blank line +
+    # a '#' comment of its own.
     scoring_setup, scoring_dumps = scoring_block(task.analysis_config)
     lines += scoring_setup
     # 7. run (event count is reserved in CalculateSetting; fall back to a
     # reasonable default so the run actually produces a non-trivial result)
-    lines.append("")
     nevents = int(getattr(task.calculate, "n_events", 0) or 0)
     if nevents <= 0:
         nevents = DEFAULT_EVENTS
-    lines.append(f"/run/beamOn {nevents}")
+    lines += ["", "# run", f"/run/beamOn {nevents}"]
     # 8. dump results AFTER the run: dumping before beamOn writes an
-    # all-zero file
+    # all-zero file. scoring_block() already labels each kind's dump block.
     if scoring_dumps:
-        lines.append("")
-        lines.append("# dump AFTER the run: dumping before beamOn "
-                     "writes an all-zero file")
+        lines += ["", "# scoring output (dumped AFTER /run/beamOn - dumping "
+                       "before the run writes an all-zero file)"]
         lines += scoring_dumps
     return "\n".join(lines) + "\n"
 
