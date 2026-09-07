@@ -313,6 +313,13 @@ class MainWindow(QMainWindow):
                 dlg.set_dark_theme(self._dark_theme)
             except Exception:
                 pass
+        # Voxel quantity preview windows stay open while the theme toggles, so
+        # push the new theme into every cached viewer as well.
+        for dlg in list(self._voxel_viewers.values()):
+            try:
+                dlg.set_dark_theme(self._dark_theme)
+            except Exception:
+                pass
         self._logger.log_system(
             f"Theme switched to {'dark' if self._dark_theme else 'light'} mode")
 
@@ -985,6 +992,7 @@ class MainWindow(QMainWindow):
                 self._project_tree.set_particle_configured(t.name, True)
             if t.physics:
                 self._project_tree.set_physics_configured(t.name, True)
+            self._restore_task_outputs(t)
         self._ensure_default_task()
         self._sync_mac_preview_tasks()
         self._logger.log_system(
@@ -1236,17 +1244,86 @@ class MainWindow(QMainWindow):
             self._task_monitor.update_task_status(name, status, pct, run_time)
         self._logger.log_system(f"[{name}] {status} ({run_time})")
         self._project_tree.set_task_status(name, status)
-        if task and task.run_log and os.path.isfile(task.run_log):
-            # a real solver run happened -> expose its console log under Results
+        if status == "completed" and task is not None:
+            # Rebuild the Results subtree from the actual run directory + the
+            # saved analysis config, so a finished voxel run can never leave a
+            # stale "default result" leaf (and vice versa) behind.
+            self._refresh_task_results(name, task)
+        elif task and task.run_log and os.path.isfile(task.run_log):
+            # failed / stopped run: keep any earlier results, just surface the
+            # console log if the solver wrote one
             self._project_tree.add_task_result(name, "run log")
-        if status == "completed":
-            kind = active_kind(task.analysis_config) if task else None
-            if kind == "voxel":
-                self._add_voxel_result_group(name, task)
-            else:
-                label = (task.analysis_type or "default") + " result"
-                self._project_tree.add_task_result(name, label)
         self._update_status_button()
+
+    def _refresh_task_results(self, name: str, task) -> None:
+        """Rebuild a task's Results children from disk + saved config.
+
+        Every entry is first removed, then re-added from what the run directory
+        actually contains, so re-running a task (or restoring it after loading
+        a project) can never stack a "default result" leaf next to a "voxel
+        result" group or leave an outdated one behind."""
+        self._project_tree.clear_task_results(name)
+        work = self._result_work_dir(task)
+        if work and os.path.isfile(os.path.join(work, "run.log")):
+            self._project_tree.add_task_result(name, "run log")
+        kind = active_kind(task.analysis_config) if task else None
+        if kind == "voxel":
+            self._add_voxel_result_group(name, task)
+            return
+        # A run may have dumped out_Box_*.csv even when the saved config no
+        # longer carries its quantity list (e.g. a project saved between
+        # configuration and run). Keep it under a plain "voxel result" instead
+        # of mislabelling the scoring output as "default result".
+        has_box_output = False
+        if work:
+            try:
+                has_box_output = any(
+                    n.startswith("out_Box_") and n.endswith(".csv")
+                    for n in os.listdir(work))
+            except OSError:
+                has_box_output = False
+        if has_box_output:
+            self._project_tree.add_task_result(name, "voxel result")
+            return
+        label = ((task.analysis_type if task else None) or "default") + " result"
+        self._project_tree.add_task_result(name, label)
+
+    def _restore_task_outputs(self, task) -> None:
+        """After loading a saved project, detect runs that already finished on
+        disk (solver/runs/<task>) and rebuild their status + Results subtree so
+        previously produced results survive an app restart."""
+        work = self._result_work_dir(task)
+        if not work:
+            return
+        csvs = []
+        log_ok = False
+        try:
+            names = os.listdir(work)
+        except OSError:
+            return
+        csvs = [n for n in names
+                if n.startswith("out_") and n.endswith(".csv")]
+        log_path = os.path.join(work, "run.log")
+        if os.path.isfile(log_path):
+            # failed runs write an error line near the end of the console log
+            try:
+                with open(log_path, "rb") as fh:
+                    fh.seek(0, 2)
+                    size = fh.tell()
+                    fh.seek(max(0, size - 8192))
+                    tail = fh.read().decode("utf-8", "replace").lower()
+            except OSError:
+                tail = ""
+            log_ok = (not any(k in tail for k in
+                              ("error", "fatal", "abnormal", "failed")))
+        if not csvs and not log_ok:
+            return
+        if task.name in self._run_manager._tasks:
+            self._run_manager._tasks[task.name].status = "completed"
+        self._project_tree.set_task_status(task.name, "completed")
+        self._refresh_task_results(task.name, task)
+        self._logger.log_system(
+            f"[{task.name}] restored {len(csvs)} result file(s) from {work}")
 
     def _on_all_finished(self):
         self._toolbar.set_running(False)

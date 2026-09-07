@@ -342,6 +342,19 @@ class ProjectTreeWidget(QWidget):
                 results.removeChild(child)
                 return
 
+    def clear_task_results(self, task_name: str) -> None:
+        """Remove every result entry (leaves and groups) under the task's
+        Results child. Used to rebuild the Results subtree deterministically
+        from the run directory on re-run / project load."""
+        item = self._find_task_item(task_name)
+        if item is None:
+            return
+        results = self._find_child(item, "Results")
+        if results is None:
+            return
+        while results.childCount():
+            results.removeChild(results.child(0))
+
     def add_task_result_group(self, task_name: str, group_label: str,
                               children) -> None:
         """Attach a grouped result (one parent node + child nodes) under the
