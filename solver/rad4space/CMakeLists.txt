@@ -42,8 +42,7 @@ target_link_libraries(rad4space ${Geant4_LIBRARIES})
 # because it relies on these scripts being in the current working directory.
 #
 set(RS_SCRIPTS
-    run.mac vis.mac gps_point.mac simpleCone.gdml axes.gdml
-  )
+    run.mac vis.mac)
 
 foreach(_script ${RS_SCRIPTS})
   configure_file(
