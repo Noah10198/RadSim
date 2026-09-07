@@ -24,7 +24,7 @@ from PyQt6.QtGui import QPalette, QColor, QFont
 from core.gdml_agent import GdmlAgent
 from core.project_io import save_project, load_project
 from core.run_manager import RunManager, RunTask
-from core.mac_builder import DEFAULT_EVENTS
+from core.mac_builder import DEFAULT_EVENTS, active_kind
 from core.solver_config import get_solver_path
 from utils.logger import AsyncLogger, LogLevel
 from ui.ribbon_toolbar import RibbonToolBar
@@ -39,6 +39,8 @@ from ui.dialogs.probe_dialog import ProbeDialog
 from ui.dialogs.voxel_dialog import VoxelDialog
 from ui.dialogs.particle_dialog import ParticleDialog
 from ui.dialogs.physics_dialog import PhysicsDialog
+from ui.dialogs.result_viewer import ResultViewerDialog
+from ui.voxel_result_viewer import VoxelResultViewer
 
 
 # Parse GDML above this size (bytes) on a background thread to keep the main
@@ -183,6 +185,7 @@ class MainWindow(QMainWindow):
         self._task_counter = 0
         self._gdml_paths: list[str] = []  # real paths of imported GDML (for project save)
         self._analysis_dialogs: dict[tuple, object] = {}  # (task, kind) -> dialog
+        self._voxel_viewers: dict[tuple, object] = {}  # (task, qname) -> viewer
         self._particle_dialogs: dict[tuple, object] = {}  # ("particle", task) -> dialog
         self._physics_dialogs: dict[tuple, object] = {}   # ("physics", task) -> dialog
         self._calculate_dialogs: dict[tuple, object] = {} # ("calculate", task) -> dialog
@@ -688,47 +691,47 @@ class MainWindow(QMainWindow):
             f"Planning: see doc/GUI_Design.md and doc/implementation_roadmap.md.")
 
     def _on_run(self):
-        """Run: optionally ask for even CPU-core assignment, then open the
-        slim run launcher (checkbox list + Run Selected)."""
+        """Open the slim run launcher (checkbox list + Run Selected). CPU
+        cores are split evenly across tasks automatically only when more than
+        one task is started at once (see _start_selected_tasks)."""
         if not self._gdml_agent.get_all_file_nodes():
             QMessageBox.information(
                 self, "No Geometry",
                 "Please import a GDML file before creating a run task.")
             return
         launcher = self._ensure_run_launcher()
-        tasks = list(self._run_manager._tasks.values())
-        if not tasks:
+        if not self._run_manager._tasks:
             QMessageBox.information(
                 self, "No Tasks",
                 "No tasks yet. Add a task by right-clicking \"Tasks\" in the "
                 "project tree before running.")
-            launcher.show()
-            launcher.raise_()
-            return
-        ret = QMessageBox.question(
-            self, "Assign compute cores",
-            "Split the computer's CPU cores evenly across tasks based on the core count?\n\n"
-            "Yes: total CPU cores are split by task count (at least 1 core per task),"
-            "and written to each task's Calculate Setting.\n"
-            "No: use each task's current Calculate Setting configuration.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if ret == QMessageBox.StandardButton.Yes:
-            total = os.cpu_count() or 4
-            idle_tasks = [t for t in tasks if t.status == "idle"]
-            if idle_tasks:
-                per = max(1, total // len(idle_tasks))
-                for t in idle_tasks:
-                    t.calculate.n_threads = per
-                    self._project_tree.update_task_threads(t.name, per)
-                self._logger.log_system(
-                    f"CPU split: {total} cores / {len(idle_tasks)} tasks -> "
-                    f"{per} threads/task")
-        else:
-            self._logger.log_system(
-                "Skipped auto-assignment; using each task's existing Calculate Setting")
         launcher.show()
         launcher.raise_()
+
+    def _start_selected_tasks(self, names: list):
+        """Start the selected tasks from a run launcher.
+
+        Thread assignment follows the agreed design: a task defaults to the
+        machine's full CPU core count; only when several tasks are launched at
+        once are the cores split evenly across them (at least 1 core per task).
+        No prompt is shown - splitting happens automatically for multi-task
+        runs and each task's Calculate Setting is updated accordingly.
+        """
+        total = os.cpu_count() or 4
+        to_start = []
+        for name in names:
+            t = self._run_manager.get_task(name)
+            if t is not None and t.status not in ("running", "queued"):
+                to_start.append(t)
+        if len(to_start) > 1:
+            per = max(1, total // len(to_start))
+            for t in to_start:
+                t.calculate.n_threads = per
+                self._project_tree.update_task_threads(t.name, per)
+            self._logger.log_system(
+                f"CPU split: {total} cores / {len(to_start)} tasks -> "
+                f"{per} threads/task")
+        self._run_manager.start(names)
 
     def _on_stop(self):
         self._run_manager.stop_all()
@@ -782,6 +785,10 @@ class MainWindow(QMainWindow):
             task_name, _, kind = rest.partition(":")
             self._open_analysis_dialog(task_name, kind)
         elif action == "result":
+            self._on_result_activated(rest)
+        elif action == "results":
+            # double-clicking the "Results" group header opens the whole
+            # output folder of the task (same viewer, no single-file focus)
             self._on_result_activated(rest)
 
     def _open_calculate_setting(self, task_name: str):
@@ -990,7 +997,7 @@ class MainWindow(QMainWindow):
         if self._run_launcher is None:
             self._run_launcher = RunMonitorDialog(self)
             self._run_launcher.set_dark_theme(self._dark_theme)
-            self._run_launcher.run_selected.connect(self._run_manager.start)
+            self._run_launcher.run_selected.connect(self._start_selected_tasks)
             self._run_manager.task_added.connect(
                 lambda task: self._run_launcher.add_task(task.name))
             for t in self._run_manager._tasks.values():
@@ -1004,7 +1011,7 @@ class MainWindow(QMainWindow):
         if self._task_monitor is None:
             self._task_monitor = TaskMonitorDialog(self)
             self._task_monitor.set_dark_theme(self._dark_theme)
-            self._task_monitor.run_selected.connect(self._run_manager.start)
+            self._task_monitor.run_selected.connect(self._start_selected_tasks)
             self._task_monitor.stop_all.connect(self._run_manager.stop_all)
             self._task_monitor.cancel_task.connect(
                 self._run_manager.stop_task)
@@ -1033,7 +1040,7 @@ class MainWindow(QMainWindow):
         task = RunTask(name="Run_001",
                        gdml_files=files or [],
                        analysis_type="default")
-        task.calculate.n_threads = max(1, (os.cpu_count() or 4) // 2)
+        task.calculate.n_threads = max(1, os.cpu_count() or 4)
         self._run_manager.add_task(task)
         self._project_tree.add_task(
             task.name, task.analysis_type, task.calculate.n_threads)
@@ -1046,7 +1053,7 @@ class MainWindow(QMainWindow):
         files = [f.name for f in self._gdml_agent.get_all_file_nodes()]
         task = RunTask(name=f"Run_{self._task_counter:03d}",
                        gdml_files=files, analysis_type="default")
-        task.calculate.n_threads = max(1, (os.cpu_count() or 4) // 2)
+        task.calculate.n_threads = max(1, os.cpu_count() or 4)
         self._run_manager.add_task(task)
         self._project_tree.add_task(
             task.name, task.analysis_type, task.calculate.n_threads)
@@ -1233,8 +1240,12 @@ class MainWindow(QMainWindow):
             # a real solver run happened -> expose its console log under Results
             self._project_tree.add_task_result(name, "run log")
         if status == "completed":
-            label = (task.analysis_type or "default") + " result"
-            self._project_tree.add_task_result(name, label)
+            kind = active_kind(task.analysis_config) if task else None
+            if kind == "voxel":
+                self._add_voxel_result_group(name, task)
+            else:
+                label = (task.analysis_type or "default") + " result"
+                self._project_tree.add_task_result(name, label)
         self._update_status_button()
 
     def _on_all_finished(self):
@@ -1272,16 +1283,134 @@ class MainWindow(QMainWindow):
         self._on_node_selected(entry_id)
 
     def _on_result_activated(self, ref: str):
-        # ref looks like "Run_001:run log" or "Run_001:<analysis> result"
+        # ref looks like "Run_001:run log", "Run_001:<analysis> result" or
+        # "Run_001:q:<quantity-name>" (a voxel quantity child node)
         task_name, _, label = ref.partition(":")
+        if label.startswith("q:"):
+            self._open_voxel_result(task_name, label[2:])
+            return
+        task = self._run_manager.get_task(task_name)
         if label == "run log":
-            task = self._run_manager.get_task(task_name)
             if task and task.run_log and os.path.isfile(task.run_log):
                 self._open_run_log(task_name, task.run_log)
                 return
-        self._logger.log_system(f"Opening result: {ref} - viewer planned")
-        QMessageBox.information(self, "Result Viewer",
-                                f"Result viewer not wired up yet: {ref}")
+            self._logger.log_system(
+                f"Opening result: {ref} - run.log not found")
+            QMessageBox.information(
+                self, "Result Viewer",
+                f"No run.log for '{task_name}'.\n\n"
+                "The solver console output was not saved, or the task has "
+                "not been executed with the real rad4space solver yet.")
+            return
+        work = self._result_work_dir(task)
+        if work is None:
+            self._logger.log_system(
+                f"Opening result: {ref} - no run output directory found")
+            QMessageBox.information(
+                self, "Result Viewer",
+                f"No solver output for '{task_name}'.\n\n"
+                "Only tasks executed with the real rad4space solver produce "
+                "result files (out_*.csv in the run directory). Simulated "
+                "runs and runs that failed before the dump step leave "
+                "nothing to view.")
+            return
+        title = f"Results - {task_name}"
+        if label and label != "run log":
+            title += f" ({label})"
+        dlg = ResultViewerDialog(title, work,
+                                 dark=self._dark_theme, parent=self)
+        self._logger.log_system(f"Opening result files from: {work}")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _add_voxel_result_group(self, name: str, task) -> None:
+        """Expose each voxel quantity of a finished task under one 'voxel
+        result' group; double-clicking a quantity opens its own preview."""
+        vcfg = ((task.analysis_config or {}).get("voxel") or {})
+        qs = vcfg.get("qs") or []
+        children = []
+        seen: set = set()  # type: ignore[reportMissingTypeArgument]
+        for q in qs:
+            qname = str(q.get("name") or "").strip()
+            qtype = str(q.get("type") or qname).strip()
+            if not qname:
+                continue
+            label = qtype if qtype not in seen else f"{qtype} ({qname})"
+            seen.add(qtype)
+            children.append((label, f"result:{name}:q:{qname}"))
+        if not children:
+            self._project_tree.add_task_result(name, "voxel result")
+            return
+        # A voxel run supersedes any earlier plain "default result" leaf (and a
+        # leaf "voxel result" from an empty-q run), so drop those before adding
+        # the new group instead of stacking a stale default under Results.
+        self._project_tree.remove_task_result(name, "default result")
+        self._project_tree.remove_task_result(name, "voxel result")
+        self._project_tree.add_task_result_group(name, "voxel result", children)
+        self._logger.log_system(
+            f"[{name}] voxel result ready: "
+            + ", ".join(c[0] for c in children))
+
+    def _open_voxel_result(self, task_name: str, qname: str) -> None:
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            return
+        vcfg = ((task.analysis_config or {}).get("voxel") or {})
+        q = next((x for x in (vcfg.get("qs") or [])
+                  if str(x.get("name")) == qname), None)
+        if q is None:
+            QMessageBox.information(
+                self, "Voxel Result",
+                f"Quantity '{qname}' is not in {task_name}'s voxel config.")
+            return
+        work = self._result_work_dir(task)
+        csv_path = os.path.join(work, f"out_Box_{qname}.csv") if work else ""
+        if not os.path.isfile(csv_path):
+            QMessageBox.information(
+                self, "Voxel Result",
+                f"No solver output for '{task_name} / {qname}'.\n\n"
+                f"Expected file:\n{csv_path or 'unknown run dir'}")
+            return
+        root = self._gdml_agent.get_root_node()
+        if root is None:
+            QMessageBox.information(
+                self, "Voxel Result",
+                "Import a GDML geometry first: the preview draws the geometry "
+                "the run was scored on.")
+            return
+        key = (task_name, qname)
+        dlg = self._voxel_viewers.get(key)
+        if dlg is None:
+            dlg = VoxelResultViewer(
+                title=f"{qname} - {task_name}", root_node=root,
+                vcfg=vcfg, csv_path=csv_path, quantity=q,
+                dark=self._dark_theme, parent=self)
+            dlg.destroyed.connect(
+                lambda _o, k=key, d=dlg: self._voxel_viewers.pop(k, None)
+                if self._voxel_viewers.get(k) is d else None)
+            self._voxel_viewers[key] = dlg
+            self._logger.log_system(
+                f"[{task_name}] voxel quantity preview opened: {qname}")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _result_work_dir(self, task) -> Optional[str]:
+        """Run output directory of a finished task: the folder holding run.mac,
+        run.log and the out_*.csv scoring dumps. Prefers the real run dir the
+        manager logged, then the conventional solver/runs/<task> location."""
+        if task is None:
+            return None
+        if task.run_log:
+            d = os.path.dirname(task.run_log)
+            if os.path.isdir(d):
+                return d
+        if task.name:
+            cand = os.path.join(_RUNS_ROOT, task.name)
+            if os.path.isdir(cand):
+                return cand
+        return None
 
     def _open_run_log(self, task_name: str, path: str) -> None:
         """Open the task's run.log in a read-only text viewer."""

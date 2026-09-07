@@ -27,10 +27,14 @@ from vtkmodules.vtkRenderingCore import (
 )
 from vtkmodules.vtkRenderingAnnotation import vtkCubeAxesActor, vtkCornerAnnotation
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
-from vtkmodules.vtkCommonDataModel import vtkPlane
+from vtkmodules.vtkCommonDataModel import vtkPlane, vtkPlaneCollection
 
-# Import VTK backends (needed on Windows)
+# Import VTK backends (needed on Windows). vtkRenderingVolumeOpenGL2 registers
+# the OpenGL implementation of vtkRayCastImageDisplayHelper used by the volume
+# (voxel-field) renderers; without it AddVolume() renders nothing and prints
+# "Error: no override found for 'vtkRayCastImageDisplayHelper'".
 import vtkmodules.vtkRenderingOpenGL2
+import vtkmodules.vtkRenderingVolumeOpenGL2
 import vtkmodules.vtkInteractionStyle
 
 from vtk_engine.vtk_scene import VtkScene
@@ -687,6 +691,7 @@ class VtkWidget(QWidget):
             seen.add(id(m))
             m.RemoveAllClippingPlanes()
             m.AddClippingPlane(self._clip_plane)
+        self._apply_volume_clip()
         self.render()
 
     def _remove_clip_planes(self):
@@ -698,7 +703,31 @@ class VtkWidget(QWidget):
                 continue
             seen.add(id(m))
             m.RemoveAllClippingPlanes()
+        self._clear_volume_clip()
         self.render()
+
+    # ── Volume overlay clipping ─────────────────────────────────────────────
+    # A vtkVolume (voxel field) overlay must be cut by the same plane, else
+    # Slice only trims the mesh and the scalar field stays intact. Subclasses
+    # that AddVolume() a scalar field return its mapper here.
+
+    def _volume_clip_mapper(self):
+        """Mapper of the vtkVolume overlay, or None if the widget has none."""
+        return None
+
+    def _apply_volume_clip(self):
+        vm = self._volume_clip_mapper()
+        if vm is None:
+            return
+        planes = vtkPlaneCollection()
+        planes.AddItem(self._clip_plane)
+        vm.SetClippingPlanes(planes)
+
+    def _clear_volume_clip(self):
+        vm = self._volume_clip_mapper()
+        if vm is None:
+            return
+        vm.SetClippingPlanes(None)
 
     def _clip_reset(self):
         b = self._clip_bounds

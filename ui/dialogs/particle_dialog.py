@@ -527,7 +527,7 @@ class ParticleDialog(QDialog):
             ix = p["combo"].findText(gp.get("name", "gamma"))
             if ix >= 0:
                 p["combo"].setCurrentIndex(ix)
-        self._g_energy.set_value(g.get("energy", 1.0))
+        self._g_energy.set_value(g.get("energy", 10.0))
         ps = g.get("position", {}) or {}
         for k in ("x", "y", "z"):
             self._g_pos[k].set_value(ps.get(k, 0.0))

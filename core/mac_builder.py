@@ -143,10 +143,18 @@ def _dump_line(kind, mesh, qs):
 # ----------------------------------------------------------------------
 # scoring block for each kind
 # ----------------------------------------------------------------------
+# Each scoring builder returns (setup, dumps):
+#   - setup  : mesh / histogram creation, must be issued BEFORE /run/beamOn
+#              (mesh + h1 must exist and fill1D must be bound when the run
+#              starts, otherwise there is nothing to accumulate into)
+#   - dumps  : /score/dump* output commands, must be issued AFTER /run/beamOn
+#              - dumping before the run writes an all-zero file
+# build_mac_text() emits setup -> /run/beamOn -> dumps in that order.
 
 def _scoring_realworld(volumes):
-    """volumes: { LVname : {"qs":[...], "hs":[...]} }"""
-    h1, fill, dumps = [], [], []
+    """volumes: { LVname : {"qs":[...], "hs":[...]} }
+    Returns (setup_lines, dump_lines)."""
+    setup, h1, fill, dumps = [], [], [], []
     id_state = {"n": 0}
     for lv, cfg in (volumes or {}).items():
         if not (cfg.get("qs") or cfg.get("hs")):
@@ -159,20 +167,26 @@ def _scoring_realworld(volumes):
         h1 += _h1
         fill += _f
         dumps += _dump_line("realworld", mesh, cfg.get("qs"))
-        yield "\n".join(block)
-    yield from h1
-    yield from fill
-    yield from dumps
+        setup.append("\n".join(block))
+    setup += h1
+    setup += fill
+    return setup, dumps
 
 
 def _scoring_probe(probes):
-    h1, fill, dumps = [], [], []
+    """Returns (setup_lines, dump_lines)."""
+    setup, h1, fill, dumps = [], [], [], []
     id_state = {"n": 0}
     for p in (probes or []):
         if not (p.get("qs") or p.get("hs")):
             continue
         name = p.get("name", "P")
         block = [f"/score/create/probe {name} {_num(p.get('half', 50.0) / 10)} cm"]
+        mat = p.get("material")
+        if mat and mat != "none":
+            # Material override: overwrites the geometry material inside the
+            # probe cube (manual 4.9.4, listing 4.31).
+            block.append(f"/score/probe/material {mat}")
         block.append(f"/score/probe/locate {_num(p.get('x', 0) / 10)} "
                      f"{_num(p.get('y', 0) / 10)} {_num(p.get('z', 0) / 10)} cm")
         block += _quantity_lines(p.get("qs"))
@@ -181,30 +195,36 @@ def _scoring_probe(probes):
         h1 += _h1
         fill += _f
         dumps += _dump_line("probe", name, p.get("qs"))
-        yield "\n".join(block)
-    yield from h1
-    yield from fill
-    yield from dumps
+        setup.append("\n".join(block))
+    setup += h1
+    setup += fill
+    return setup, dumps
 
 
 def _scoring_voxel(vcfg):
+    """Returns (setup_lines, dump_lines)."""
     half = vcfg.get("half", [50.0, 50.0, 50.0])
     nbin = vcfg.get("nbin", [10, 10, 10])
     center = vcfg.get("center", [0.0, 0.0, 0.0])
     qs = vcfg.get("qs", [])
     mesh = "Box"
-    yield (f"/score/create/boxMesh {mesh}\n"
-           f"/score/mesh/boxSize {_num(2 * half[0] / 10)} "
-           f"{_num(2 * half[1] / 10)} {_num(2 * half[2] / 10)} cm\n"
-           f"/score/mesh/nBin {int(nbin[0])} {int(nbin[1])} {int(nbin[2])}\n"
-           f"/score/mesh/translate/xyz {_num(center[0] / 10)} "
-           f"{_num(center[1] / 10)} {_num(center[2] / 10)} cm\n"
-           + "\n".join(_quantity_lines(qs))
-           + "\n/score/close")
+    # Geant4 scoring: /score/mesh/boxSize takes the HALF lengths of the box
+    # mesh, not the full width (Geant4 manual: boxSize 100 100 100 cm yields
+    # an overall 2 m x 2 m x 2 m mesh). half[] here is the true half extent in
+    # mm, so pass half/10 cm - doubling it would make the scored volume 2x
+    # larger than the GUI enclosure.
+    setup = [f"/score/create/boxMesh {mesh}\n"
+             f"/score/mesh/boxSize {_num(half[0] / 10)} "
+             f"{_num(half[1] / 10)} {_num(half[2] / 10)} cm\n"
+             f"/score/mesh/nBin {int(nbin[0])} {int(nbin[1])} {int(nbin[2])}\n"
+             f"/score/mesh/translate/xyz {_num(center[0] / 10)} "
+             f"{_num(center[1] / 10)} {_num(center[2] / 10)} cm\n"
+             + "\n".join(_quantity_lines(qs))
+             + "\n/score/close"]
     # boxMesh has no 1-D histogram support; dump each quantity to its own csv
-    for q in qs or []:
-        yield f"/score/dumpQuantityToFile {mesh} {q.get('name', 'q')} " \
-              f"out_{mesh}_{q.get('name', 'q')}.csv"
+    dumps = [f"/score/dumpQuantityToFile {mesh} {q.get('name', 'q')} "
+             f"out_{mesh}_{q.get('name', 'q')}.csv" for q in (qs or [])]
+    return setup, dumps
 
 
 # ----------------------------------------------------------------------
@@ -212,20 +232,20 @@ def _scoring_voxel(vcfg):
 # ----------------------------------------------------------------------
 
 def scoring_block(analysis_config):
-    """The scoring macro text appended after initialize for the active kind
-    (or a small comment if nothing is configured)."""
+    """Scoring macro for the active kind. Returns (setup_lines, dump_lines):
+    setup goes before /run/beamOn (mesh + histogram creation), dumps go after
+    it (see header comment above). Returns two empty lists when no analysis
+    is configured."""
     kind = active_kind(analysis_config)
     if kind is None:
-        return ["# (no analysis configured for this task - no scoring mesh)"]
+        return (["# (no analysis configured for this task - no scoring mesh)"],
+                [])
     cfg = analysis_config.get(kind) or {}
-    lines = []
     if kind == "realworld":
-        lines += list(_scoring_realworld(cfg.get("volumes") or {}))
-    elif kind == "probe":
-        lines += list(_scoring_probe(cfg.get("probes") or []))
-    elif kind == "voxel":
-        lines += list(_scoring_voxel(cfg))
-    return lines
+        return _scoring_realworld(cfg.get("volumes") or {})
+    if kind == "probe":
+        return _scoring_probe(cfg.get("probes") or [])
+    return _scoring_voxel(cfg)
 
 
 def build_mac_text(gdml_full_path: str, task) -> str:
@@ -265,9 +285,11 @@ def build_mac_text(gdml_full_path: str, task) -> str:
     lines.append("")
     src_lines = gps.macro_lines(task.particle or {})
     lines += (src_lines if src_lines else ["# (no particle source configured)"])
-    # 6. scoring
+    # 6. scoring - only the mesh / histogram setup goes here; the dump
+    # commands must follow /run/beamOn (section 8) or they write zero files.
     lines.append("")
-    lines += scoring_block(task.analysis_config)
+    scoring_setup, scoring_dumps = scoring_block(task.analysis_config)
+    lines += scoring_setup
     # 7. run (event count is reserved in CalculateSetting; fall back to a
     # reasonable default so the run actually produces a non-trivial result)
     lines.append("")
@@ -275,6 +297,13 @@ def build_mac_text(gdml_full_path: str, task) -> str:
     if nevents <= 0:
         nevents = DEFAULT_EVENTS
     lines.append(f"/run/beamOn {nevents}")
+    # 8. dump results AFTER the run: dumping before beamOn writes an
+    # all-zero file
+    if scoring_dumps:
+        lines.append("")
+        lines.append("# dump AFTER the run: dumping before beamOn "
+                     "writes an all-zero file")
+        lines += scoring_dumps
     return "\n".join(lines) + "\n"
 
 

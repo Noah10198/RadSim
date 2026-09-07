@@ -113,7 +113,7 @@ def default_gun_config():
     particle from a point, emitted along a fixed direction."""
     return {
         "particle": {"kind": "standard", "name": "gamma"},
-        "energy": 1.0,                                   # MeV  (/gps/energy)
+        "energy": 10.0,                                  # MeV  (/gps/energy)
         "position": {"x": 0.0, "y": 0.0, "z": 0.0},      # mm   (/gps/position)
         "direction": {"x": 0.0, "y": 0.0, "z": 1.0},     #      (/gps/direction)
     }
@@ -178,7 +178,7 @@ def build_gun_macro(cfg) -> list:
                    f"{_f(p.get('q', 0))} {_f(p.get('e', 0))}")
     else:
         out.append(f"/gps/particle {p.get('name', 'gamma')}")
-    out.append(f"/gps/energy {_f(g.get('energy', 1.0))} MeV")
+    out.append(f"/gps/energy {_f(g.get('energy', 10.0))} MeV")
     ps = g.get("position", {})
     out.append(f"/gps/position {_f(ps.get('x', 0) / 10)} "
                f"{_f(ps.get('y', 0) / 10)} {_f(ps.get('z', 0) / 10)} cm")
@@ -223,10 +223,29 @@ def build_macro(cfg) -> list:
     en = cfg.get("energy", {})
     etype = en.get("type", "Lin")
     out.append(f"/gps/ene/type {etype}")
-    for key, _lbl, _u in ENERGY_FIELDS.get(etype, []):
-        if key in en:
-            pre, suf = _CMD[key]
-            out.append(f"{pre} {_f(en[key])}" + (f" {suf}" if suf else ""))
+    # GPS 的 Lin 分布是定义在 [E_min, E_max] 区间上的线性 p.d.f
+    # f(E)=gradient*E+intercept。四个参数都要显式写出：E 上下限缺失时源
+    # 只会在默认(约 0)能段上分布，gradient/intercept 双零时分布恒为零，
+    # 两种情况都会让源静默不发粒子，导致所有记分恒 0。
+    # 缺省回退与默认配置一致：E 上下限 2–10 MeV、gradient/intercept (1,1)。
+    if etype == "Lin":
+        lo = float(en.get("e_min", 0.0) or 0.0)
+        hi = float(en.get("e_max", 0.0) or 0.0)
+        if not (0 < lo < hi):
+            lo, hi = 2.0, 10.0
+        out.append(f"/gps/ene/min {_f(lo)} MeV")
+        out.append(f"/gps/ene/max {_f(hi)} MeV")
+        g = en.get("gradient", 0.0) or 0.0
+        i = en.get("intercept", 0.0) or 0.0
+        if not g and not i:
+            g, i = 1.0, 1.0
+        out.append(f"/gps/ene/gradient {_f(g)}")
+        out.append(f"/gps/ene/intercept {_f(i)}")
+    else:
+        for key, _lbl, _u in ENERGY_FIELDS.get(etype, []):
+            if key in en:
+                pre, suf = _CMD[key]
+                out.append(f"{pre} {_f(en[key])}" + (f" {suf}" if suf else ""))
     if etype == "User":
         d = en.get("data") or []
         if d:
@@ -283,7 +302,7 @@ def gun_summary(cfg) -> str:
         pt = p.get("name", "gamma")
     ps = g.get("position", {})
     d = g.get("direction", {})
-    return (f"{pt}  {_f(g.get('energy', 1))} MeV  "
+    return (f"{pt}  {_f(g.get('energy', 10))} MeV  "
             f"@({_f(ps.get('x', 0))},{_f(ps.get('y', 0))},"
             f"{_f(ps.get('z', 0))})mm  "
             f"dir({_f(d.get('x', 0))},{_f(d.get('y', 0))},"

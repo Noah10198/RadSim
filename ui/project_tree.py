@@ -327,6 +327,47 @@ class ProjectTreeWidget(QWidget):
         results.setExpanded(True)
         item.setExpanded(True)
 
+    def remove_task_result(self, task_name: str, label: str) -> None:
+        """Remove a single (leaf) result child by label, silently if absent.
+        Only plain leaf items are removed, never a result group."""
+        item = self._find_task_item(task_name)
+        if item is None:
+            return
+        results = self._find_child(item, "Results")
+        if results is None:
+            return
+        for i in range(results.childCount()):
+            child = results.child(i)
+            if child.text(0) == label and child.childCount() == 0:
+                results.removeChild(child)
+                return
+
+    def add_task_result_group(self, task_name: str, group_label: str,
+                              children) -> None:
+        """Attach a grouped result (one parent node + child nodes) under the
+        task's Results child. children is a list of (text, action). A group
+        with the same label is refreshed instead of stacked (matches
+        add_task_result)."""
+        item = self._find_task_item(task_name)
+        if item is None:
+            return
+        results = self._find_child(item, "Results")
+        if results is None:
+            return
+        for i in range(results.childCount()):
+            if results.child(i).text(0) == group_label:
+                results.removeChild(results.child(i))
+                break
+        group = QTreeWidgetItem(results, [group_label])
+        group.setData(0, TASK_CTX_ROLE, CTX_RESULT)
+        for text, action in children:
+            child = QTreeWidgetItem(group, [text])
+            child.setData(0, TASK_ACTION_ROLE, action)
+            child.setData(0, TASK_CTX_ROLE, CTX_RESULT)
+        group.setExpanded(True)
+        results.setExpanded(True)
+        item.setExpanded(True)
+
     def remove_task(self, task_name: str) -> bool:
         item = self._find_task_item(task_name)
         if item is None:
