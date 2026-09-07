@@ -3,16 +3,18 @@
 //   Replaceable reference physics list (G4PhysListFactory), modeled on
 //   Gorad's GRPhysicsList.
 //
-//   IMPORTANT REGISTRATION CONTRACT
-//     This object is NOT registered with the run manager by main().  The
-//     /rad4space/physics/* options only mutate plain members; the reference
-//     list itself is generated lazily by GeneratePL() inside
-//     ConstructParticle()/ConstructProcess()/SetCuts(), i.e. when the run
-//     manager is initialized.  The macro MUST therefore issue
-//       /rad4space/initialize
-//     (NOT /run/initialize) after setting the physics options.  Otherwise
-//     Geant4 may cache the default FTFP_BERT list before SetPL runs and the
-//     selection silently has no effect.
+//   REGISTRATION
+//     This object is registered with the run manager directly in rad4space.cc
+//     (main), together with the detector construction and the action
+//     initialization.  The /rad4space/physics/* UI options only mutate plain
+//     members; the reference list itself is generated lazily by GeneratePL()
+//     on first use inside ConstructParticle()/ConstructProcess()/SetCuts(),
+//     which Geant4 calls when the run manager initializes -- i.e. well after
+//     the macro commands in run.mac have been processed.
+//     The physics options (SetPL/AddHP/AddRDM/SetGlobalCut/SetMaxStep) must
+//     therefore be issued in the PreInit state, BEFORE /run/initialize
+//     (as done in run.mac).  There is no /rad4space/initialize command:
+//     initialization is the standard Geant4 /run/initialize.
 //
 
 #include "R4PhysicsList.hh"
@@ -119,7 +121,7 @@ void R4PhysicsList::GeneratePL()
     ed << "Physics list <" << plname << "> is not a valid reference physics "
           "list. Use /rad4space/physics/SetPL with a G4PhysListFactory name "
           "(e.g. FTFP_BERT, QGSP_BIC, Shielding, FTFP_BERT_EMY, ...) and make "
-          "sure /rad4space/initialize is issued afterwards.";
+          "sure it is issued before /run/initialize.";
     G4Exception("R4PhysicsList::GeneratePL()", "R4PHYS001", FatalException, ed);
   }
   physList = factory->GetReferencePhysList(plname);
