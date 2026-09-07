@@ -1,0 +1,236 @@
+"""ProbeResultChartDialog - one matplotlib comparison chart per probe result
+group.
+
+* quantity group : bar per (probe, quantity) of the same physical type, so
+  e.g. the energyDeposit measured by P1/P2/P3 sit side by side.
+* histogram group: one step curve per probe histogram of the same type on a
+  single axis, with optional per-probe normalisation.
+
+The group payload comes from probe_result_viewer.build_probe_result_groups.
+If matplotlib is missing the dialog shows an install hint.
+"""
+
+try:
+    import matplotlib
+
+    matplotlib.use("QtAgg")
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+    from matplotlib.figure import Figure
+
+    _MPL = True
+except Exception:  # pragma: no cover - depends on user's site-packages
+    _MPL = False
+    Figure = FigureCanvasQTAgg = None
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QPushButton,
+    QVBoxLayout,
+)
+
+_DARK_BG, _DARK_FG, _LIGHT_BG, _LIGHT_FG = (
+    "#11111b", "#cdd6f4", "#ffffff", "#2c2c2c")
+_CYCLE = ["#4c8df0", "#e07050", "#43a95f", "#d6b12b", "#b05cc7",
+          "#2ea8c7", "#e06ac7", "#8a9bb5"]
+
+
+def _fmt(v) -> str:
+    try:
+        if v == 0 or 1e-4 <= abs(v) < 1e6:
+            return f"{v:.6g}"
+        return f"{v:.3e}"
+    except Exception:
+        return str(v)
+
+
+class ProbeResultChartDialog(QDialog):
+    """One comparison chart for one probe result group."""
+
+    def __init__(self, title, group, dark=False, parent=None):
+        super().__init__(parent)
+        self._group = group
+        self._dark = bool(dark)
+        self._series = group.get("series") or []
+        self.setWindowTitle(title)
+        self.resize(1040, 700)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        self._build_ui()
+        if _MPL:
+            self._replot()
+        else:
+            self._canvas_host.setText(
+                "matplotlib is not installed.\n\n"
+                "Install it (pip install matplotlib) to view probe results "
+                "as comparison charts.")
+        self._apply_theme()
+
+    # ------------------------------------------------------------ UI --
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+        kind_txt = ("quantity comparison" if
+                    self._group.get("kind") == "quantity"
+                    else "histogram comparison")
+        head = QLabel(f"{kind_txt} — {self._group.get('label', '')}\n"
+                      + self._summary_text())
+        head.setWordWrap(True)
+        head.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(head)
+
+        if _MPL:
+            self._canvas = FigureCanvasQTAgg(Figure())
+            self._canvas_host = self._canvas
+        else:
+            self._canvas = None
+            self._canvas_host = QLabel("")
+            self._canvas_host.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._canvas_host.setMinimumHeight(360)
+        lay.addWidget(self._canvas_host, 1)
+
+        bar = QHBoxLayout()
+        if self._group.get("kind") == "histogram" and _MPL:
+            self._norm_cb = QCheckBox("Normalize each probe to its total")
+            self._norm_cb.stateChanged.connect(self._replot)
+            bar.addWidget(self._norm_cb)
+            self._log_cb = QCheckBox("Log x axis")
+            self._log_cb.setChecked(
+                any(s.get("hist", {}).get("log") for s in self._series))
+            self._log_cb.stateChanged.connect(self._replot)
+            bar.addWidget(self._log_cb)
+        else:
+            self._norm_cb = self._log_cb = None
+        bar.addStretch(1)
+        if _MPL:
+            save_btn = QPushButton("Save PNG")
+            save_btn.clicked.connect(self._save_png)
+            bar.addWidget(save_btn)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        bar.addWidget(close_btn)
+        lay.addLayout(bar)
+
+    def _summary_text(self) -> str:
+        lines = []
+        for s in self._series:
+            if self._group.get("kind") == "quantity":
+                unit = s.get("unit")
+                lines.append(f"  • {s['probe']} ({s['qname']}): "
+                             f"{_fmt(s.get('value'))}"
+                             + (f" {unit}" if unit else "")
+                             + f"    entries {_fmt(s.get('entry'))}")
+            else:
+                h = s.get("hist", {})
+                lines.append(f"  • {s['probe']} ({s['qname']}): "
+                             f"{_fmt(h.get('total', 0))} counts in "
+                             f"{h.get('nbins', 0)} bins"
+                             + (f", underflow {_fmt(h.get('underflow', 0))}"
+                                if h.get("underflow") else ""))
+        more = len(lines) - 10
+        return "\n".join(lines[:10]) + (f"\n  … and {more} more" if more > 0
+                                        else "")
+
+    # -------------------------------------------------------- theme --
+
+    def _apply_theme(self):
+        if self._dark:
+            self.setStyleSheet(
+                f"QDialog {{ background: {_DARK_BG}; }}"
+                f"QLabel {{ color: {_DARK_FG}; background: transparent; }}"
+                f"QCheckBox {{ color: {_DARK_FG}; }}"
+                f"QPushButton {{ background: #1e1e2e; color: {_DARK_FG}; "
+                f"border: 1px solid #45475a; border-radius: 6px; "
+                f"padding: 4px 14px; }}")
+        else:
+            self.setStyleSheet("")
+
+    # ------------------------------------------------------ plots --
+
+    def _replot(self):
+        if not _MPL or self._canvas is None:
+            return
+        fig = self._canvas.figure
+        fig.clear()
+        ax = fig.add_subplot(111)
+        fg = _DARK_FG if self._dark else _LIGHT_FG
+        ax.tick_params(colors=fg, labelsize=9)
+        for sp in ax.spines.values():
+            sp.set_color(fg if self._dark else "#bbbbbb")
+        if self._group.get("kind") == "quantity":
+            self._plot_quantity(ax)
+        else:
+            self._plot_histogram(ax)
+        fig.tight_layout()
+        self._canvas.draw()
+
+    def _fg(self):
+        return _DARK_FG if self._dark else _LIGHT_FG
+
+    def _plot_quantity(self, ax):
+        series = self._series
+        names = [s["probe"] for s in series]
+        dup = {n for n in names if names.count(n) > 1}
+        labels = [f"{s['probe']} ({s['qname']})" if s["probe"] in dup
+                  else s["probe"] for s in series]
+        unit = next((s.get("unit") for s in series if s.get("unit")), "")
+        ax.set_title(f"{self._group.get('label')} — total per probe",
+                     color=self._fg(), fontsize=12)
+        ax.set_ylabel(f"total [{unit}]" if unit else "total")
+        ax.set_xlabel("probe")
+        xs = list(range(len(series)))
+        bars = ax.bar(xs, [s.get("value", 0.0) for s in series], width=0.55,
+                      color=[_CYCLE[i % len(_CYCLE)] for i in xs])
+        ax.set_xticks(xs)
+        ax.set_xticklabels(labels, fontsize=9)
+        ax.grid(axis="y", alpha=0.25 if self._dark else 0.5, linestyle="--")
+        for xi, s in zip(xs, series):
+            v = s.get("value", 0.0)
+            ax.text(xi, v, _fmt(v), ha="center",
+                    va="bottom" if v >= 0 else "top",
+                    fontsize=8, color=self._fg())
+
+    def _plot_histogram(self, ax):
+        norm = bool(self._norm_cb.isChecked()) if self._norm_cb else False
+        logx = bool(self._log_cb.isChecked()) if self._log_cb else False
+        total = sum((s.get("hist", {}).get("total") or 0) for s in self._series)
+        ax.set_title(f"{self._group.get('label')} — histogram comparison",
+                     color=self._fg(), fontsize=12)
+        ax.set_ylabel("counts per bin" if not norm else "% of total counts")
+        xunit = next((s.get("xunit") for s in self._series if s.get("xunit")),
+                     None)
+        ax.set_xlabel(f"[{xunit}]" if xunit else "value")
+        if logx:
+            ax.set_xscale("log")
+        names = [s["probe"] for s in self._series]
+        dup = {n for n in names if names.count(n) > 1}
+        for i, s in enumerate(self._series):
+            h = s.get("hist") or {}
+            edges, counts = h.get("edges"), h.get("counts")
+            if not edges or not counts:
+                continue
+            ys = list(counts)
+            if norm and total:
+                ys = [c / total * 100.0 for c in ys]
+            xs = list(edges)
+            ys_ = list(ys) + [ys[-1] if ys else 0.0]
+            label = f"{s['probe']} ({s['qname']})" if s["probe"] in dup \
+                else s["probe"]
+            ax.step(xs, ys_, where="post", color=_CYCLE[i % len(_CYCLE)],
+                    label=label, lw=1.6)
+        if self._series:
+            ax.legend()
+        ax.grid(alpha=0.25 if self._dark else 0.5, linestyle="--")
+
+    # ------------------------------------------------------ actions --
+
+    def _save_png(self):
+        if not _MPL or self._canvas is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save chart", "probe_result.png",
+            "PNG image (*.png)")
+        if path:
+            self._canvas.figure.savefig(path, dpi=150,
+                                        facecolor=self._canvas.figure
+                                        .get_facecolor())
