@@ -4,8 +4,9 @@ Shows the imported GDML geometry plus the interpolated, color-mapped scalar
 field of one quantity (out_Box_<q>.csv) as a mostly-opaque volume (no per-voxel
 boxes). The bottom toolbar mirrors the main-window VTK toolbar order
 (Clip / Fit All / Ortho / X / Y / Z), with a field-opacity slider on the
-right (default 90% = nearly solid), a small bottom-left orientation-axis
-marker, and a colourbar in the bottom-right corner.
+right (default 90% = nearly solid). The corner orientation-axis marker sits in
+the lower-right corner (same viewport / letter size as the trajectory viewer's
+corner axes) and the colourbar occupies the upper-right corner.
 
 CSV rows carry (iX, iY, iZ, value) with iZ varying fastest (Geant4 score
 semantics). The physical grid is built from the voxel config center / half
@@ -206,8 +207,9 @@ class VoxelFieldWidget(VtkWidget):
         self._style_sliders()
 
     def _style_sliders(self):
-        """Theme the Opacity / Clip sliders so they do not stay light on the
-        dark toolbar row (the base widget deliberately keeps the OS slider)."""
+        """Theme the Opacity / Clip sliders so they stay visible on the dark
+        toolbar row (the base VtkWidget applies the same round-ball slider
+        style automatically; this call keeps it in place right at build)."""
         dark = self._is_dark
         groove = "#3a3a4e" if dark else "#d8d8d8"
         fill = "#7a8bd0" if dark else "#4a6aa8"
@@ -346,7 +348,9 @@ class VoxelFieldWidget(VtkWidget):
         bar.SetNumberOfLabels(6)
         bar.SetWidth(0.09)
         bar.SetHeight(0.42)
-        bar.SetPosition(0.88, 0.05)
+        # Upper right, clear of the lower-right corner axes (same layout the
+        # trajectory viewer uses: colourbar top right, axes bottom right).
+        bar.SetPosition(0.87, 0.52)
         label = title if not unit else f"{title}\n[{unit}]"
         bar.SetTitle(label)
         bar.SetLabelFormat("%.3g")
@@ -433,18 +437,21 @@ class VoxelFieldWidget(VtkWidget):
             tp.SetShadow(0)
             tp.ItalicOff()
             tp.BoldOff()
-        # Tick numbers stay small and quiet under the title ...
-        bar.GetLabelTextProperty().SetFontSize(9)
-        # ... while the quantity name gets the emphasis, with a clear gap to
-        # the tick numbers below so the two never touch.
-        bar.GetTitleTextProperty().SetFontSize(15)
+        # Tick numbers: readable but still quieter than the title above them.
+        bar.GetLabelTextProperty().SetFontSize(12)
+        # Quantity name gets the emphasis via bold + one step larger. Kept
+        # close to the trajectory colourbar so both viewers read consistently.
+        bar.GetTitleTextProperty().SetFontSize(13)
         bar.GetTitleTextProperty().BoldOn()
-        bar.SetVerticalTitleSeparation(18)
+        bar.SetVerticalTitleSeparation(14)
         # text on the bar, no extra box/frame around it
         bar.DrawFrameOff()
         bar.DrawBackgroundOff()
 
-    # ── corner (orientation) axis marker, bottom-left ─────────────────────
+    # ── corner (orientation) axis marker, bottom-right ────────────────────
+    # Size and position match the trajectory viewer's corner axes exactly:
+    # viewport (0.76, 0.01, 1.0, 0.27) pinned to the lower-right corner with
+    # 24 pt X / Y / Z captions, so both result windows read identically.
     def showEvent(self, event):
         super().showEvent(event)
         self._enable_axes_marker()
@@ -460,8 +467,9 @@ class VoxelFieldWidget(VtkWidget):
             omw = vtkOrientationMarkerWidget()
             omw.SetOrientationMarker(ax)
             omw.SetInteractor(self.renderWindow().GetInteractor())
-            # bottom-left corner, kept small so it never fights the model
-            omw.SetViewport(0.004, 0.004, 0.15, 0.19)
+            # Lower-right corner - the same viewport the trajectory viewer
+            # uses for its corner axes, so the two windows stay consistent.
+            omw.SetViewport(0.76, 0.01, 1.0, 0.27)
             omw.SetEnabled(1)
             omw.InteractiveOff()
             self._axes_marker = omw
@@ -472,7 +480,8 @@ class VoxelFieldWidget(VtkWidget):
 
     def _update_axes_marker(self):
         """Caption letters X / Y / Z are painted in the inverse of the scene
-        background (white on the dark scene, near-black on the light one)."""
+        background (white on the dark scene, near-black on the light one), at
+        the same 24 pt size as the trajectory viewer's corner axes."""
         omw = getattr(self, "_axes_marker", None)
         if omw is None:
             return
@@ -486,7 +495,7 @@ class VoxelFieldWidget(VtkWidget):
                 tp.SetColor(*lab)
                 tp.SetShadow(0)
                 tp.ItalicOff()
-                tp.SetFontSize(14)
+                tp.SetFontSize(24)
         except Exception:
             pass
 

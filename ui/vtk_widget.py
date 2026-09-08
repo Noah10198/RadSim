@@ -44,6 +44,21 @@ from core.gdml_tree import GdmlNode
 _GPU_INFO_PRINTED = False
 
 
+def _mapper_addr(m) -> str:
+    """Stable identity of the underlying C++ mapper.
+
+    Must NOT deduplicate by id(m): VTK python does not guarantee one pooled
+    wrapper per C++ mapper, so a transient wrapper may be GC'd and its id()
+    recycled mid-loop, falsely marking distinct mappers as "already seen".
+    An actor holds a reference to its mapper for its whole lifetime, so the
+    C++ address is unique and stable while we iterate live actors.
+    """
+    try:
+        return m.GetAddressAsString("vtkPolyDataMapper")
+    except Exception:
+        return str(m)
+
+
 # ── VtkWidget ───────────────────────────────────────────────────────
 
 
@@ -75,6 +90,7 @@ class VtkWidget(QWidget):
         self._clip_bounds: Optional[List[float]] = None
         self._original_colors: Dict[int, Tuple[float, float, float]] = {}
         self._gdml_actors: List[vtkActor] = []
+        self._is_dark = True
 
         # ── Build UI ──
         self._build_ui()
@@ -358,7 +374,8 @@ class VtkWidget(QWidget):
         self._apply_toolbar_style(True)
 
     def _apply_toolbar_style(self, dark: bool):
-        """Toolbar styling — button & combo only; slider keeps OS default (matches mesh preview)."""
+        """Toolbar styling — buttons, combo and the themed sliders."""
+        self._is_dark = dark
         if dark:
             bg       = "#2a2a3a"
             fg       = "#e0e0e0"
@@ -429,6 +446,27 @@ class VtkWidget(QWidget):
 
         self.setStyleSheet(btn + combo + lbl)
         self._clip_panel.setStyleSheet(f"background: {clip_bg};" + btn + combo + lbl)
+        self._style_qt_sliders(dark)
+
+    def _style_qt_sliders(self, dark: bool):
+        """Theme the Clip slider (and an Opacity slider if one exists) with the
+        same look the voxel result window uses: slim rounded groove with a
+        coloured fill and a round-ball thumb. Keeps the control visible on the
+        dark clip strip instead of the OS-native light slider."""
+        groove = "#3a3a4e" if dark else "#d8d8d8"
+        fill = "#7a8bd0" if dark else "#4a6aa8"
+        ss = f"""
+        QSlider::groove:horizontal {{ height: 4px; background: {groove};
+            border-radius: 2px; }}
+        QSlider::sub-page:horizontal {{ background: {fill}; border-radius: 2px; }}
+        QSlider::add-page:horizontal {{ background: {groove}; border-radius: 2px; }}
+        QSlider::handle:horizontal {{ width: 14px; margin: -5px 0;
+            background: {fill}; border-radius: 7px; }}
+        """
+        for s in (getattr(self, "_clip_slider", None),
+                  getattr(self, "_opacity_slider", None)):
+            if s is not None:
+                s.setStyleSheet(ss)
 
     # ── Default scene ──
 
@@ -662,6 +700,27 @@ class VtkWidget(QWidget):
         if self._clip_active:
             self._sync_clip_plane()
 
+    def _iter_clip_mappers(self):
+        """All mappers the clip plane must cut: every GDML actor's mapper plus
+        whatever a subclass reports via `_extra_clip_mappers` (e.g. the
+        trajectory polyline overlay lives outside _gdml_actors)."""
+        for a in self._gdml_actors:
+            m = a.GetMapper()
+            if m is not None:
+                yield m
+        for m in self._extra_clip_mappers():
+            if m is not None:
+                yield m
+
+    def _extra_clip_mappers(self):
+        """Subclass hook: extra mappers the clip plane should also slice.
+
+        The scalar-volume overlay is NOT covered here - a vtkVolumeMapper
+        takes a clipping-plane collection through SetClippingPlanes, which is
+        handled separately by `_volume_clip_mapper`.
+        """
+        return ()
+
     def _sync_clip_plane(self):
         b = self._clip_bounds
         if not b:
@@ -682,13 +741,18 @@ class VtkWidget(QWidget):
         # Mappers are shared between instances with identical geometry:
         # deduplicate by mapper so the same clipping plane is not added tens
         # of thousands of times (otherwise dragging the clip slider stutters
-        # on large scenes)
+        # on large scenes).
+        # Dedup on the underlying C++ address, NOT on id(m): VTK python does
+        # not guarantee one pooled wrapper per C++ mapper, so a transient
+        # wrapper may be GC'd and its id() recycled mid-loop, which falsely
+        # marks distinct mappers as "already seen" and leaves them without
+        # the clip plane.
         seen: set = set()
-        for a in self._gdml_actors:
-            m = a.GetMapper()
-            if m is None or id(m) in seen:
+        for m in self._iter_clip_mappers():
+            key = _mapper_addr(m)
+            if key in seen:
                 continue
-            seen.add(id(m))
+            seen.add(key)
             m.RemoveAllClippingPlanes()
             m.AddClippingPlane(self._clip_plane)
         self._apply_volume_clip()
@@ -696,12 +760,13 @@ class VtkWidget(QWidget):
 
     def _remove_clip_planes(self):
         # Mappers are shared; remove the planes deduplicated by mapper
+        # (address-keyed - see _sync_clip_plane for why id(m) is unsafe)
         seen: set = set()
-        for a in self._gdml_actors:
-            m = a.GetMapper()
-            if m is None or id(m) in seen:
+        for m in self._iter_clip_mappers():
+            key = _mapper_addr(m)
+            if key in seen:
                 continue
-            seen.add(id(m))
+            seen.add(key)
             m.RemoveAllClippingPlanes()
         self._clear_volume_clip()
         self.render()
@@ -727,7 +792,10 @@ class VtkWidget(QWidget):
         vm = self._volume_clip_mapper()
         if vm is None:
             return
-        vm.SetClippingPlanes(None)
+        # Do NOT pass None here: SetClippingPlanes is overloaded
+        # (vtkPlanes / vtkPlaneCollection) so None raises
+        # "TypeError: ambiguous call". An empty collection clears it.
+        vm.SetClippingPlanes(vtkPlaneCollection())
 
     def _clip_reset(self):
         b = self._clip_bounds
