@@ -71,6 +71,35 @@ def supports_histogram(qtype: str) -> bool:
     return quantity_meta(qtype)[1] is not None
 
 
+# Per-quantity default 1D-histogram range (min, max), expressed in the
+# histogram x-axis unit of the quantity (see QUANTITY_TYPES). Every histogram
+# row used to share a single generic default (0.001-1000); the physics of each
+# scored quantity spans a different window (e.g. doseDeposit sits at much
+# lower values than nOfTrack), so the suggested range is now picked from the
+# target quantity's type. Rows keep the auto range only until the user edits
+# min/max by hand; stored ranges always win when loading a saved config.
+HISTOGRAM_DEFAULT_RANGES = {
+    "energyDeposit":      (0.001, 10.0),
+    "doseDeposit":        (0.0001, 1.0),
+    "volumeFlux":         (0.001, 100.0),
+    "nOfStep":            (0.001, 100.0),
+    "nOfTrack":           (0.001, 1000.0),
+    "nOfSecondary":       (0.001, 50.0),
+    "cellFlux":           (0.001, 100.0),
+    "passageCellFlux":    (0.001, 100.0),
+    "passageCellCurrent": (0.001, 100.0),
+    "passageTrackLength": (0.001, 100.0),
+}
+# Shared fallback used while no quantity type is known yet (legacy default;
+# a stored range equal to it is also treated as "not customized").
+DEFAULT_HISTOGRAM_RANGE = (0.001, 1000.0)
+
+
+def histogram_default_range(qtype: str):
+    """Default 1D-histogram [min, max] suggested for a quantity type."""
+    return HISTOGRAM_DEFAULT_RANGES.get(qtype or "", DEFAULT_HISTOGRAM_RANGE)
+
+
 def histogram_parameter_conflicts(probes: list) -> list:
     """Detect 1-D histogram settings (bins / range / log) that differ for the
     SAME quantity type across several entries (probes / realworld volumes).
@@ -475,9 +504,17 @@ class QuantityRowWidget(QFrame):
 
     changed = pyqtSignal()
     removed = pyqtSignal(object)
+    # Emitted only when the user edits the Name box: (previous name, new
+    # name). The 1D-histogram panel listens to it so rows whose target equals
+    # the old name are renamed automatically.
+    nameEdited = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Last name this row was synced to (set by set_quantity, updated by
+        # user edits). Used to compute renames without firing them when a
+        # config is merely loaded into the widget.
+        self._prev_name = ""
         self._build_ui()
 
     def _build_ui(self):
@@ -497,6 +534,9 @@ class QuantityRowWidget(QFrame):
         self._name_edit.setPlaceholderText("q1")
         self._name_edit.setFixedWidth(110)
         self._name_edit.textChanged.connect(self.changed.emit)
+        # textEdited fires only on real user input (never on setText), so
+        # loading a stored config cannot trigger renames.
+        self._name_edit.textEdited.connect(self._on_name_edited)
         row.addWidget(self._name_edit)
 
         self._type_cb = QComboBox()
@@ -547,6 +587,18 @@ class QuantityRowWidget(QFrame):
         self._unit_label.setText(f"[{unit}]" if unit else "[count]")
         self.changed.emit()
 
+    def _on_name_edited(self, text: str):
+        """Follow live user edits of the Name box: every non-empty rename is
+        announced so histogram rows whose target equals the old name can be
+        updated in lockstep. While the box is momentarily empty (select-all +
+        retype) the previous name is kept, so the retyped name is still
+        matched against the original one."""
+        old = self._prev_name
+        if text:
+            if old and old.strip() != text.strip():
+                self.nameEdited.emit(old.strip(), text.strip())
+            self._prev_name = text
+
     def get_quantity(self) -> dict:
         p = self._filter_cb.currentData()
         return {
@@ -557,6 +609,9 @@ class QuantityRowWidget(QFrame):
 
     def set_quantity(self, q: dict):
         self._name_edit.setText(q.get("name", "q"))
+        # setText does not fire textEdited, so record the name here to keep
+        # _prev_name in sync with what the widget was loaded with.
+        self._prev_name = q.get("name", "q")
         t = q.get("type", "energyDeposit")
         idx = self._type_cb.findData(t)
         if idx >= 0:
@@ -575,6 +630,8 @@ class QuantityListPanel(QWidget):
     """Scrollable quantity list: add row / inline filter / delete."""
 
     changed = pyqtSignal()
+    # Re-emitted from QuantityRowWidget.nameEdited: (old name, new name).
+    nameEdited = pyqtSignal(str, str)
 
     def __init__(self, parent=None, stretchable=False,
                  scroll_min_height=210):
@@ -626,6 +683,7 @@ class QuantityListPanel(QWidget):
                               "type": "energyDeposit", "filter": None})
         row.changed.connect(self.changed.emit)
         row.removed.connect(self._on_row_removed)
+        row.nameEdited.connect(self.nameEdited.emit)
         self._rows.append(row)
         # Insert before the stretch item
         self._container_layout.insertWidget(
@@ -659,10 +717,13 @@ class HistogramRowWidget(QFrame):
     changed = pyqtSignal()
     removed = pyqtSignal(object)
 
-    def __init__(self, qnames: list, qunits: dict = None, parent=None):
+    def __init__(self, qnames: list, qunits: dict = None, qtypes: dict = None,
+                 parent=None):
         super().__init__(parent)
         self._qnames = qnames
         self._qunits = qunits or {}
+        self._qtypes = qtypes or {}   # quantity name -> quantity type
+        self._auto_range = True       # range follows target type until edited
         self._build_ui()
 
     def _build_ui(self):
@@ -696,17 +757,19 @@ class HistogramRowWidget(QFrame):
         self._min = QDoubleSpinBox()
         self._min.setRange(-1e12, 1e12)
         self._min.setDecimals(4)
-        self._min.setValue(0.001)
+        self._min.setValue(DEFAULT_HISTOGRAM_RANGE[0])
         self._min.setFixedWidth(88)
         self._min.valueChanged.connect(self.changed.emit)
+        self._min.valueChanged.connect(self._on_range_touched)
         row.addWidget(self._min)
         row.addWidget(QLabel("–"))
         self._max = QDoubleSpinBox()
         self._max.setRange(-1e12, 1e12)
         self._max.setDecimals(4)
-        self._max.setValue(1000.0)
+        self._max.setValue(DEFAULT_HISTOGRAM_RANGE[1])
         self._max.setFixedWidth(88)
         self._max.valueChanged.connect(self.changed.emit)
+        self._max.valueChanged.connect(self._on_range_touched)
         row.addWidget(self._max)
 
         # Range unit (MeV / mm / ...) follows the selected quantity. No
@@ -726,14 +789,16 @@ class HistogramRowWidget(QFrame):
         del_btn.clicked.connect(lambda: self.removed.emit(self))
         row.addWidget(del_btn)
 
-        self._set_choices(self._qnames, self._qunits)
+        self._set_choices(self._qnames, self._qunits, self._qtypes)
 
-    def _set_choices(self, qnames: list, qunits: dict = None):
+    def _set_choices(self, qnames: list, qunits: dict = None,
+                     qtypes: dict = None):
         """Refresh the set of DEFINED quantities that validate the typed
-        target and resolve its x-axis unit. Never overwrites the text the
-        user typed."""
+        target, its x-axis unit and (for the auto default range) its type.
+        Never overwrites the text the user typed."""
         self._qnames = qnames or []
         self._qunits = qunits or {}
+        self._qtypes = qtypes or {}
         self._refresh_target()
 
     def _refresh_target(self):
@@ -747,7 +812,31 @@ class HistogramRowWidget(QFrame):
         ok = (not name) or (name in self._qnames)
         self._q_edit.setStyleSheet(
             "" if ok else "QLineEdit { border: 1px solid #d34f4f; }")
+        self._maybe_apply_default_range()
         return ok
+
+    def _on_range_touched(self, *_):
+        """A min/max edit by the user stops the per-type auto range for this
+        row (later target changes no longer reset it)."""
+        self._auto_range = False
+
+    def _maybe_apply_default_range(self):
+        """While the range still carries its auto default, suggest the [min,
+        max] that fits the target quantity's type (energyDeposit 0.001-10 MeV,
+        doseDeposit 0.0001-1 Gy, nOfTrack 0.001-1000 MeV, ...). No-op once the
+        user edited the range manually or the target is not a defined
+        quantity. Silent: no changed signal, so it never triggers a save."""
+        if not self._auto_range:
+            return
+        qtype = (self._qtypes or {}).get(self.get_qname())
+        if not qtype:
+            return
+        lo, hi = histogram_default_range(qtype)
+        for spin, val in ((self._min, lo), (self._max, hi)):
+            if abs(spin.value() - val) > 1e-9:
+                spin.blockSignals(True)
+                spin.setValue(val)
+                spin.blockSignals(False)
 
     def set_qname(self, name: str):
         """Typed target quantity (textChanged -> _on_q_changed emits changed)."""
@@ -771,9 +860,18 @@ class HistogramRowWidget(QFrame):
     def set_histogram(self, h: dict):
         self.set_qname(h.get("q", ""))
         self._bins.setValue(h.get("bins", 100))
-        rng = h.get("rng", [0.001, 1000.0])
-        self._min.setValue(rng[0])
-        self._max.setValue(rng[1])
+        rng = h.get("rng")
+        if rng and len(rng) >= 2 and (
+                abs(float(rng[0]) - DEFAULT_HISTOGRAM_RANGE[0]) > 1e-9
+                or abs(float(rng[1]) - DEFAULT_HISTOGRAM_RANGE[1]) > 1e-9):
+            # A real stored range wins; only the shared legacy default
+            # (0.001-1000) is treated as "not customized" and is re-suggested
+            # from the target quantity's type.
+            self._min.setValue(float(rng[0]))
+            self._max.setValue(float(rng[1]))
+            self._auto_range = False
+        else:
+            self._maybe_apply_default_range()
         self._log.setChecked(h.get("log", False))
 
 
@@ -799,9 +897,9 @@ class HistogramListPanel(QWidget):
         header = QHBoxLayout()
         header.addWidget(QLabel("1D histogram"))
         header.addStretch()
-        add_btn = QPushButton("➕ Add histogram")
-        add_btn.clicked.connect(self.add_row)
-        header.addWidget(add_btn)
+        self._add_btn = QPushButton("➕ Add histogram")
+        self._add_btn.clicked.connect(self.add_row)
+        header.addWidget(self._add_btn)
         v.addLayout(header)
 
         scroll = QScrollArea()
@@ -823,23 +921,53 @@ class HistogramListPanel(QWidget):
     def _usable_qnames(self) -> list:
         return self._qnames if hasattr(self, "_qnames") else []
 
-    def set_qnames(self, qnames: list, units: dict = None):
+    def set_qnames(self, qnames: list, units: dict = None,
+                   types: dict = None):
         """Candidate target quantities = names of the quantities in the
-        current panel that support fill1D (units maps name -> range unit).
+        current panel that support fill1D (units maps name -> range unit,
+        types maps name -> quantity type for the per-type auto range).
 
         Update and emit the signal only when the candidates really change
         (to avoid a changed -> sync -> changed infinite loop).
         """
         if (getattr(self, "_qnames", None) == qnames
-                and getattr(self, "_qunits", None) == units):
+                and getattr(self, "_qunits", None) == units
+                and getattr(self, "_qtypes", None) == types):
             return
         self._qnames = qnames
         self._qunits = units or {}
+        self._qtypes = types or {}
         for r in self._rows:
             # Keeps the typed text, only re-validates it and refreshes the
-            # x-axis unit for the current quantity list.
-            r._set_choices(qnames, self._qunits)
+            # x-axis unit / type for the current quantity list.
+            r._set_choices(qnames, self._qunits, self._qtypes)
+        self._refresh_add_state()
         self.changed.emit()
+
+    def _refresh_add_state(self):
+        """Add histogram stays enabled only while the panel holds fewer rows
+        than there are quantities that support a 1-D spectrum - a histogram
+        row can never outnumber its candidate quantities."""
+        limit = len(self._usable_qnames())
+        can_add = limit > 0 and len(self._rows) < limit
+        self._add_btn.setEnabled(can_add)
+        self._add_btn.setToolTip(
+            f"Add a 1D-histogram row "
+            f"({len(self._rows)}/{max(limit, len(self._rows))} used - "
+            f"max is the number of quantities that support a spectrum)"
+            if not can_add else
+            "Add a 1D-histogram row")
+
+    def rename_target(self, old_name: str, new_name: str):
+        """A quantity was renamed: update every histogram row whose target
+        text equals the old name. Rows pointing elsewhere (or rows that were
+        deliberately left without a histogram) are untouched, so manual
+        assignments survive renames."""
+        if not old_name or not new_name or old_name == new_name:
+            return
+        for r in self._rows:
+            if r.get_qname() == old_name:
+                r.set_qname(new_name)
 
     def _next_free_qname(self) -> str:
         """First defined quantity (in definition order) that is not yet the
@@ -858,7 +986,8 @@ class HistogramListPanel(QWidget):
         names = self._usable_qnames()
         if not names:
             return
-        row = HistogramRowWidget(names, getattr(self, "_qunits", {}))
+        row = HistogramRowWidget(names, getattr(self, "_qunits", {}),
+                                 getattr(self, "_qtypes", {}))
         if h:
             row.set_histogram(h)
         else:
@@ -871,6 +1000,7 @@ class HistogramListPanel(QWidget):
         self._rows.append(row)
         self._container_layout.insertWidget(
             self._container_layout.count() - 1, row)
+        self._refresh_add_state()
         self.changed.emit()
 
     def _on_row_removed(self, row):
@@ -878,6 +1008,7 @@ class HistogramListPanel(QWidget):
             self._rows.remove(row)
         self._container_layout.removeWidget(row)
         row.deleteLater()
+        self._refresh_add_state()
         self.changed.emit()
 
     def get_histograms(self) -> list:

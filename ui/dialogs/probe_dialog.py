@@ -86,13 +86,16 @@ class ProbeDialog(QDialog):
         self._ui_timer.setSingleShot(True)
         self._ui_timer.setInterval(150)
         self._ui_timer.timeout.connect(self._apply_form_changed)
-        # The default size is applied after the UI is built (on first
-        # activation the layout shrinks the window to its sizeHint, overriding
-        # the resize done before build_ui) and forced once more when the
-        # preview is created. The width leaves room for a form column that
-        # fits a full histogram row (~668 px) plus a large 3D preview.
+        # Final default size: a form column that fits a full histogram row
+        # (~668 px) plus a large 3D preview. Requested while the dialog is
+        # still hidden so its native window is born at this size (avoids a
+        # deferred resize, after the VTK preview appears, that makes the
+        # window visibly jump and briefly leaves a blank strip). Re-applied in
+        # showEvent before the first paint in case the first layout activation
+        # overrides it.
         self._default_size = (1360, 780)
         self._size_applied = False
+        self.resize(*fit_size_to_screen(self, *self._default_size))
 
         # Lazy 3D: build the scene only after the window is really mapped
         # (showEvent), so that building large GDML or rendering into an
@@ -103,6 +106,19 @@ class ProbeDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not getattr(self, "_size_applied", False) and self.isVisible():
+            self._size_applied = True
+            # Apply the final default size before the first paint: the layout
+            # would otherwise show the window at its (smaller) sizeHint and
+            # the deferred resize would make it jump right/down afterwards.
+            self.resize(*fit_size_to_screen(self, *self._default_size))
+            # Normalize the left column width already for the first paint
+            # (same values the preview builder re-applies later).
+            if hasattr(self, "_split"):
+                left = self._FORM_COL_DEFAULT_W
+                avail = self._split.width()
+                self._split.setSizes(
+                    [left, max(300, avail - left - 8)])
         if not self._preview_built and self.isVisible():
             self._preview_built = True
             # Create the VTK widget only after the dialog is really mapped
@@ -230,6 +246,7 @@ class ProbeDialog(QDialog):
         self._q_panel = QuantityListPanel(stretchable=True,
                                           scroll_min_height=150)
         self._q_panel.changed.connect(self._on_config_changed)
+        self._q_panel.nameEdited.connect(self._on_quantity_renamed)
         rv.addWidget(self._q_panel, 1)
 
         self._h_panel = HistogramListPanel(stretchable=True,
@@ -343,12 +360,7 @@ class ProbeDialog(QDialog):
         """
         if getattr(self, "_closed", False):
             return
-        # The default size was deferred because on first activation the layout
-        # shrinks the window to its sizeHint; apply it before laying out the
-        # preview so the interactor never sees a transient geometry.
-        if not getattr(self, "_size_applied", False):
-            self._size_applied = True
-            self.resize(*fit_size_to_screen(self, *self._default_size))
+        # The window size was fixed in showEvent (before the first paint).
         # Give the form column its content-driven default width now that the
         # window has its final size; the 3D column takes all the rest.
         if hasattr(self, "_split"):
@@ -649,12 +661,20 @@ class ProbeDialog(QDialog):
         qs = self._q_panel.get_quantities()
         usable = []
         units = {}
+        types = {}
         for q in qs:
             if supports_histogram(q["type"]):
                 usable.append(q["name"])
                 _, hx = quantity_meta(q["type"])
                 units[q["name"]] = hx or ""
-        self._h_panel.set_qnames(usable, units)
+                # Lets the histogram rows suggest a per-type default range.
+                types[q["name"]] = q["type"]
+        self._h_panel.set_qnames(usable, units, types)
+
+    def _on_quantity_renamed(self, old_name, new_name):
+        """Follow a quantity rename in the 1D-histogram rows whose target
+        equals the old name (rows stay free-form otherwise)."""
+        self._h_panel.rename_target(old_name, new_name)
 
     # -- Save --
 

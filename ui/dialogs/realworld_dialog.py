@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QLineEdit, QSplitter, QWidget,
     QHeaderView,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QBrush, QColor
 
 from core.gdml_tree import GdmlNodeType
@@ -53,19 +53,19 @@ class RealWorldDialog(QDialog):
         self._build_ui()
         self._populate_volumes()
         self._apply_theme()
-        # On first activation the layout shrinks the window to its sizeHint
-        # (overriding the resize done before build_ui), so the default size
-        # is forced back once after the first show
+        # Final default size, requested while the dialog is still hidden so
+        # its native window is born at this size, and re-applied in showEvent
+        # before the first paint. (A delayed resize after the first activation
+        # makes the window visibly jump and briefly leaves a blank strip.)
         self._default_size = (1150, 740)
         self._size_applied = False
+        self.resize(*fit_size_to_screen(self, *self._default_size))
 
     def showEvent(self, event):
         super().showEvent(event)
         if not getattr(self, "_size_applied", False) and self.isVisible():
             self._size_applied = True
-            QTimer.singleShot(
-                0, lambda: self.resize(*fit_size_to_screen(
-                    self, *self._default_size)))
+            self.resize(*fit_size_to_screen(self, *self._default_size))
 
     # -- Data --
 
@@ -127,6 +127,7 @@ class RealWorldDialog(QDialog):
         self._q_panel = QuantityListPanel(stretchable=True,
                                           scroll_min_height=150)
         self._q_panel.changed.connect(self._on_config_changed)
+        self._q_panel.nameEdited.connect(self._on_quantity_renamed)
         rv.addWidget(self._q_panel, 1)
 
         self._h_panel = HistogramListPanel(stretchable=True,
@@ -331,12 +332,20 @@ class RealWorldDialog(QDialog):
         qs = self._q_panel.get_quantities()
         usable = []
         units = {}
+        types = {}
         for q in qs:
             if supports_histogram(q["type"]):
                 usable.append(q["name"])
                 _, hx = quantity_meta(q["type"])
                 units[q["name"]] = hx or ""
-        self._h_panel.set_qnames(usable, units)
+                # Lets the histogram rows suggest a per-type default range.
+                types[q["name"]] = q["type"]
+        self._h_panel.set_qnames(usable, units, types)
+
+    def _on_quantity_renamed(self, old_name, new_name):
+        """Follow a quantity rename in the 1D-histogram rows whose target
+        equals the old name (rows stay free-form otherwise)."""
+        self._h_panel.rename_target(old_name, new_name)
 
     def _save_current(self):
         """Write the current panel state back into self._cfg for the

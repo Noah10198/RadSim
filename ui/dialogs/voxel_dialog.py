@@ -63,11 +63,18 @@ class VoxelDialog(QDialog):
         self._load_existing()
         self._build_ui()
         self._apply_theme()
-        # Same default size as the probe dialog, forced back after the first
-        # show (on first activation the layout shrinks the window to its
-        # sizeHint, overriding the resize done before build_ui)
-        self._default_size = (1120, 700)
+        # Final default size: a left column sized to the widest quantity row
+        # (or a reasonable minimum) plus a large 3D preview. Requested while
+        # the dialog is still hidden so its native window is born at this size
+        # (avoids a deferred resize, after the VTK preview appears, that makes
+        # the window visibly grow to the right/bottom and briefly leaves the
+        # newly exposed lower-right corner blank). Re-applied in showEvent
+        # before the first paint in case the first layout activation overrides
+        # it.
+        self._default_size = (
+            min(1600, max(1120, self._form_col_width() + 640)), 700)
         self._size_applied = False
+        self.resize(*fit_size_to_screen(self, *self._default_size))
 
         # Lazy 3D: build the scene only after the window is really mapped
         # (showEvent)
@@ -76,6 +83,18 @@ class VoxelDialog(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not getattr(self, "_size_applied", False) and self.isVisible():
+            self._size_applied = True
+            # Default width keeps a column sized to the widest quantity row
+            # (or a reasonable minimum) plus a large 3D preview. Applied here,
+            # before the first paint, so the dialog opens at its final size
+            # instead of growing once the VTK preview is created.
+            self._default_size = (
+                min(1600, max(1120, self._form_col_width() + 640)), 700)
+            self.resize(*fit_size_to_screen(self, *self._default_size))
+            # Normalize the left column to its widest row already for the
+            # first paint (same call the preview builder runs later).
+            self._apply_form_width()
         if not self._preview_built and self.isVisible():
             self._preview_built = True
             # Create the VTK widget only after the dialog is really mapped
@@ -434,19 +453,10 @@ class VoxelDialog(QDialog):
         """
         if getattr(self, "_closed", False):
             return
-        # The default size was deferred because on first activation the layout
-        # shrinks the window to its sizeHint; apply it before laying out the
-        # preview so the interactor never sees a transient geometry.
-        if not getattr(self, "_size_applied", False):
-            self._size_applied = True
-            # Default width keeps a column sized to the widest quantity row
-            # (or a reasonable minimum) plus a large 3D preview.
-            self._default_size = (
-                min(1600, max(1120, self._form_col_width() + 640)), 700)
-            self.resize(*fit_size_to_screen(self, *self._default_size))
-            # Fit the left column to its widest quantity row; the preview
-            # column receives all the remaining width.
-            self._apply_form_width()
+        # The window size was fixed in showEvent (before the first paint); here
+        # the left column is fitted to its widest quantity row and the preview
+        # column receives all the remaining width.
+        self._apply_form_width()
         if os.environ.get("EASY2RAD_NO_VTK"):
             # Debug switch: keep the placeholder, never build a VTK widget
             self._preview_ph.setText(
