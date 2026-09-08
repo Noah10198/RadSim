@@ -161,3 +161,61 @@ Geant4 11.4 原生 command-based scoring（新版 `/score/` 语法），4 个独
 - `Probes.csv`：primitive scorer 积分（total、total²、entry）
 - `rad4space_h1_<name>.csv`：1-D 能谱 histogram
 - 默认输出类型为 csv（`R4RunAction` 中 `SetDefaultFileType("csv")`）
+
+## 粒子轨迹数据（重绘时如何连接，不误连）
+
+轨迹输出与上面的 scoring / histogram 无关，用于在 GUI 端按位置重绘粒子路径。
+**始终输出**（无需开关命令）：`R4SteppingAction` 把轨迹点写入进程级共享存储，
+由 **master 的 `EndOfRunAction`** 一次性写出 `Traj.csv`（工作目录下）。
+从 master 写（而不是 worker）是因为默认 tasking 模式的线程编号与经典 MT 不同，
+master 的 EndOfRunAction 是最可靠的统一落盘点。
+
+为避免跨线程合并，**记录者只选一个 worker**：不是写死线程号，而是**原子地让
+第一个进入 stepping 的 worker 当选**（`ClaimRecorder()`）。tasking 下 worker
+编号为 0..N-1、经典 MT 下为 1..N，写死任何一个都会在另一种模式下失效，故动态选取。
+
+> 因此默认多线程时 Traj.csv 只含"当选 worker"处理的那部分事件（约 beamOn/nThreads）；
+> 要全量，轨迹用途的宏里固定写 `/run/numberOfThreads 1`（唯一 worker 必然当选）。
+> serial 模式下没有 worker 线程、不会输出。
+
+上限是代码内**硬编码**的两个常量（都在 `R4RunAction.cc`，需要时改后重编译）：
+- `kMaxRecordEvents`：最多记录**完整事件**数（0=不限，默认不限）；
+- `kMaxTrajPoints`：Traj.csv 总点数上限（默认约 5000）。
+
+截断发生在**事件/轨迹边界**，保证写出的每条轨迹完整（不会出现半截折线）。
+
+### 数据模型：每个点一行，带分组键（单位：mm）
+
+```
+eventID, trackID, parentID, particle, step, x, y, z
+```
+
+- `step=0` 的一行是这条 track 的**起点（顶点）**；`step=1..N` 是每个 step 的终点；
+- `parentID=0` ⇒ primary；次级粒子的 `parentID` 指向产生它的 trackID；
+- 保留 `particle` 名称，仅用于读取端**按粒子类型上色**（"手册"配色表由读取端维护，
+  求解器不产颜色）。
+
+### 为什么只有位置 + 分组键，没有 vol / t / Ekin
+
+重绘只关心一件事：**这条折线的几何形状与连接顺序**。
+
+- 几何形状：由有序的 `(x,y,z)` 完全决定；
+- 连接顺序：由 `(eventID, trackID, step)` 决定。
+
+`vol / t / Ekin` 不参与折线拓扑，加进去对重绘没有意义；将来若确实需要，可在后处理
+按 `(eventID, trackID, step)` 回查，或作为附加属性列补充，不会改变连接规则。
+
+### 连接规则（读取端实现，按此保证不误连）
+
+1. 按 `(eventID, trackID)` 分组 —— 一个组就是一条轨迹；
+2. 组内按 `step` 升序排列；
+3. 相邻两点相连成线段。
+
+容易误连的三个坑（为什么必须有分组键）：
+
+- 次级粒子在母粒子某步终点"诞生"，二者**坐标重合但 trackID 不同**，只靠位置/近邻
+  连接就会串线 → 必须按 trackID 分组；
+- 每个事件内 trackID 从 1 重新编号 → **分组键必须带 eventID**，只按 trackID 会把
+  不同事件连在一起；
+- 当前只采线程 1：其 eventID 从 0 重新计，且只覆盖该线程分到的部分事件 →
+  需要完整事件号/全量数据时用 `/run/numberOfThreads 1`（线程 1 即唯一 worker）。
