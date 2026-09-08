@@ -120,15 +120,19 @@ class RealWorldDialog(QDialog):
         rv.setContentsMargins(4, 0, 0, 0)
         rv.setSpacing(6)
 
-        # Elastic panels fill the dialog height (quantity ~5/8, histogram
-        # ~3/8) so the right column has no dead space.
-        self._q_panel = QuantityListPanel(stretchable=True)
+        # Elastic panels fill the dialog height. Both get the SAME stretch
+        # factor and the same minimum height so the two lists grow by the
+        # same amount when the dialog is resized and show a comparable
+        # number of rows by default (same alignment as the probe dialog).
+        self._q_panel = QuantityListPanel(stretchable=True,
+                                          scroll_min_height=150)
         self._q_panel.changed.connect(self._on_config_changed)
-        rv.addWidget(self._q_panel, 5)
+        rv.addWidget(self._q_panel, 1)
 
-        self._h_panel = HistogramListPanel(stretchable=True)
+        self._h_panel = HistogramListPanel(stretchable=True,
+                                           scroll_min_height=150)
         self._h_panel.changed.connect(self._on_config_changed)
-        rv.addWidget(self._h_panel, 3)
+        rv.addWidget(self._h_panel, 1)
 
         self._summary = QLabel("No logical volume selected")
         self._summary.setStyleSheet("color: #888888; font-size: 11px;")

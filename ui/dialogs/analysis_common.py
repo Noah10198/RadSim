@@ -71,6 +71,72 @@ def supports_histogram(qtype: str) -> bool:
     return quantity_meta(qtype)[1] is not None
 
 
+def histogram_parameter_conflicts(probes: list) -> list:
+    """Detect 1-D histogram settings (bins / range / log) that differ for the
+    SAME quantity type across several entries (probes / realworld volumes).
+
+    Overlaying histograms of one quantity type on a single chart only makes
+    sense when every series shares the same binning; otherwise the x-axes do
+    not align and the comparison is misleading. Dialogs should warn while the
+    user still sees the form (visible feedback), not after the run.
+
+    probes: config list entries, each with "qs" (name -> quantity type) and
+    "hs" rows {q, bins, rng, log}. Returns human-readable multi-line conflict
+    descriptions, one per quantity type, or [] when everything is consistent.
+    """
+    groups = {}  # quantity type -> [ {probe, qname, bins, rng, log}, ... ]
+    for p in probes or []:
+        label = str(p.get("name") or p.get("lv") or "?")
+        qmeta = {str(q.get("name") or ""): q for q in (p.get("qs") or [])}
+        for h in p.get("hs") or []:
+            q = qmeta.get(str(h.get("q") or ""))
+            if q is None:
+                continue
+            qtype = str(q.get("type") or "")
+            if not qtype:
+                continue
+            groups.setdefault(qtype, []).append({
+                "probe": label,
+                "qname": str(h.get("q") or ""),
+                "bins": int(h.get("bins", 100)),
+                "rng": [round(float(v), 9) for v in h.get("rng", [0, 1])],
+                "log": bool(h.get("log", False)),
+            })
+
+    out = []
+    for qtype, entries in groups.items():
+        if len(entries) < 2:  # a lone histogram cannot disagree with anyone
+            continue
+        base = entries[0]
+
+        def _row(e):
+            return (f"{e['probe']}.{e['qname']}  bins={e['bins']}, "
+                    f"range=[{e['rng'][0]:g}, {e['rng'][1]:g}], "
+                    f"log={'on' if e['log'] else 'off'}")
+
+        diffs = []
+        for e in entries[1:]:
+            changed = []
+            if e["bins"] != base["bins"]:
+                changed.append(f"bins {base['bins']} -> {e['bins']}")
+            if e["rng"] != base["rng"]:
+                changed.append(f"range {base['rng']} -> {e['rng']}")
+            if e["log"] != base["log"]:
+                changed.append(f"log {'on' if base['log'] else 'off'} "
+                               f"-> {'on' if e['log'] else 'off'}")
+            if changed:
+                diffs.append(f"{e['probe']}.{e['qname']}: "
+                             + "; ".join(changed))
+        if not diffs:
+            continue
+        unit = quantity_meta(qtype)[0]
+        head = f"{qtype} [{unit}]" if unit else qtype
+        lines = [f"{head} - differs from {_row(base)}:", *(_row(e)
+                                                           for e in entries)]
+        out.append("\n".join(lines))
+    return out
+
+
 def gen_quantity_name(existing: list) -> str:
     n = len(existing) + 1
     while f"q{n}" in existing:
@@ -609,10 +675,15 @@ class HistogramRowWidget(QFrame):
         row.setSpacing(5)
 
         row.addWidget(QLabel("Quantity:"))
-        self._q_cb = QComboBox()
-        self._q_cb.setMinimumWidth(110)
-        self._q_cb.currentIndexChanged.connect(self._on_q_changed)
-        row.addWidget(self._q_cb, 1)
+        # The target is typed like the quantity Name box instead of being
+        # picked from a dropdown: new histogram rows auto-assign the defined
+        # quantities in order (q1, q2, …), and the typed text is validated
+        # against the defined quantities (see _refresh_target).
+        self._q_edit = QLineEdit()
+        self._q_edit.setPlaceholderText("q1")
+        self._q_edit.setMinimumWidth(110)
+        self._q_edit.textChanged.connect(self._on_q_changed)
+        row.addWidget(self._q_edit, 1)
 
         row.addWidget(QLabel("bins:"))
         self._bins = QSpinBox()
@@ -658,33 +729,47 @@ class HistogramRowWidget(QFrame):
         self._set_choices(self._qnames, self._qunits)
 
     def _set_choices(self, qnames: list, qunits: dict = None):
-        """Repopulate the target-quantity combo and refresh the range unit."""
-        self._qnames = qnames
+        """Refresh the set of DEFINED quantities that validate the typed
+        target and resolve its x-axis unit. Never overwrites the text the
+        user typed."""
+        self._qnames = qnames or []
         self._qunits = qunits or {}
-        self._q_cb.blockSignals(True)
-        self._q_cb.clear()
-        self._q_cb.addItems(qnames if qnames else ["—"])
-        self._q_cb.blockSignals(False)
-        self._on_q_changed()
+        self._refresh_target()
 
-    def _on_q_changed(self):
-        name = self._q_cb.currentText()
+    def _refresh_target(self):
+        """Re-validate the typed quantity name and update the range-unit
+        column. A name that matches no defined quantity gets a red outline
+        (mac_builder silently drops histogram rows whose target quantity is
+        not defined on the same mesh)."""
+        name = self.get_qname()
         unit = self._qunits.get(name, "")
         self._unit_label.setText(unit if unit else "")
+        ok = (not name) or (name in self._qnames)
+        self._q_edit.setStyleSheet(
+            "" if ok else "QLineEdit { border: 1px solid #d34f4f; }")
+        return ok
+
+    def set_qname(self, name: str):
+        """Typed target quantity (textChanged -> _on_q_changed emits changed)."""
+        self._q_edit.setText(name or "")
+
+    def get_qname(self) -> str:
+        return self._q_edit.text().strip()
+
+    def _on_q_changed(self, *_):
+        self._refresh_target()
         self.changed.emit()
 
     def get_histogram(self) -> dict:
         return {
-            "q": self._q_cb.currentText(),
+            "q": self.get_qname(),
             "bins": self._bins.value(),
             "rng": [self._min.value(), self._max.value()],
             "log": self._log.isChecked(),
         }
 
     def set_histogram(self, h: dict):
-        idx = self._q_cb.findText(h.get("q", ""))
-        if idx >= 0:
-            self._q_cb.setCurrentIndex(idx)
+        self.set_qname(h.get("q", ""))
         self._bins.setValue(h.get("bins", 100))
         rng = h.get("rng", [0.001, 1000.0])
         self._min.setValue(rng[0])
@@ -751,12 +836,23 @@ class HistogramListPanel(QWidget):
         self._qnames = qnames
         self._qunits = units or {}
         for r in self._rows:
-            old = r.get_histogram()["q"]
+            # Keeps the typed text, only re-validates it and refreshes the
+            # x-axis unit for the current quantity list.
             r._set_choices(qnames, self._qunits)
-            idx = r._q_cb.findText(old)
-            if idx >= 0:
-                r._q_cb.setCurrentIndex(idx)
         self.changed.emit()
+
+    def _next_free_qname(self) -> str:
+        """First defined quantity (in definition order) that is not yet the
+        target of any histogram row, so consecutive Add clicks map to
+        q1, q2, q3, … in lockstep with the quantity list."""
+        names = self._usable_qnames()
+        if not names:
+            return ""
+        used = {r.get_histogram().get("q") for r in self._rows}
+        for n in names:
+            if n not in used:
+                return n
+        return names[0]
 
     def add_row(self, h: dict = None):
         names = self._usable_qnames()
@@ -765,6 +861,11 @@ class HistogramListPanel(QWidget):
         row = HistogramRowWidget(names, getattr(self, "_qunits", {}))
         if h:
             row.set_histogram(h)
+        else:
+            # Auto-assign the next quantity that has no histogram yet, so the
+            # new row lines up with the quantity list instead of always
+            # defaulting to the first quantity.
+            row.set_histogram({"q": self._next_free_qname()})
         row.changed.connect(self.changed.emit)
         row.removed.connect(self._on_row_removed)
         self._rows.append(row)

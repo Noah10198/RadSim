@@ -20,8 +20,8 @@ Non-modal dialog - the user can keep operating the main window while configuring
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
-    QListWidget, QListView, QSplitter, QLineEdit, QComboBox, QDoubleSpinBox,
-    QWidget, QApplication, QProgressBar,
+    QListWidget, QSplitter, QLineEdit, QComboBox, QDoubleSpinBox,
+    QWidget, QApplication, QProgressBar, QMessageBox,
 )
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 import os
@@ -34,7 +34,7 @@ from ui.vtk_widget import VtkPreviewWidget
 from ui.dialogs.analysis_common import (
     QuantityListPanel, HistogramListPanel, DIALOG_STYLE,
     quantity_meta, supports_histogram, MATERIAL_CHOICES,
-    fit_size_to_screen,
+    fit_size_to_screen, histogram_parameter_conflicts,
 )
 
 PROBE_COLORS = [
@@ -141,28 +141,29 @@ class ProbeDialog(QDialog):
         rv.setContentsMargins(0, 0, 4, 0)
         rv.setSpacing(6)
 
-        # Probe chips at the top (mockup .pr-bar), above the Name field;
-        # Add / Delete sit on the right of the chip list.
-        probe_bar = QHBoxLayout()
-        probe_bar.setSpacing(6)
-        probe_bar.addWidget(QLabel("Probes:"))
-        self._chip_list = QListWidget()
-        self._chip_list.setFlow(QListView.Flow.LeftToRight)
-        self._chip_list.setWrapping(True)
-        self._chip_list.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._chip_list.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._chip_list.setFixedHeight(72)
-        self._chip_list.currentRowChanged.connect(self._on_probe_selected)
-        probe_bar.addWidget(self._chip_list, 1)
+        # Probe chips at the top (mockup .pr-bar). One probe per row in a
+        # vertical list that scrolls once there are many probes - instead of
+        # squeezing all of them into a single horizontal row. Add / Delete sit
+        # on the header line to the right.
+        chip_header = QHBoxLayout()
+        chip_header.setSpacing(6)
+        chip_header.addWidget(QLabel("Probes:"))
+        chip_header.addStretch()
         add_btn = QPushButton("➕ Add probe")
         add_btn.clicked.connect(self._add_probe)
-        probe_bar.addWidget(add_btn)
+        chip_header.addWidget(add_btn)
         del_btn = QPushButton("🗑 Delete probe")
         del_btn.clicked.connect(self._delete_probe)
-        probe_bar.addWidget(del_btn)
-        rv.addLayout(probe_bar)
+        chip_header.addWidget(del_btn)
+        rv.addLayout(chip_header)
+
+        self._chip_list = QListWidget()
+        # Vertical single-column list; ~5 rows visible, the rest scrolls.
+        self._chip_list.setFixedHeight(120)
+        self._chip_list.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._chip_list.currentRowChanged.connect(self._on_probe_selected)
+        rv.addWidget(self._chip_list)
 
         # Probe property form (mockup .col-form / .attr). Each property is on
         # its own row; every length is in mm.
@@ -221,17 +222,20 @@ class ProbeDialog(QDialog):
         self._mat_hint.setWordWrap(True)
         rv.addWidget(self._mat_hint)
 
-        # Elastic quantity/histogram lists of the currently selected probe,
-        # following the realworld-dialog stretch conventions (5 : 3).
+        # Elastic quantity/histogram lists of the currently selected probe.
+        # Both get the SAME stretch factor and the same minimum height, so the
+        # two panels grow by the same amount when the window is resized and a
+        # comparable number of rows is visible by default (the 1D histogram
+        # list used to get far less vertical space with a 5 : 3 split).
         self._q_panel = QuantityListPanel(stretchable=True,
                                           scroll_min_height=150)
         self._q_panel.changed.connect(self._on_config_changed)
-        rv.addWidget(self._q_panel, 5)
+        rv.addWidget(self._q_panel, 1)
 
         self._h_panel = HistogramListPanel(stretchable=True,
-                                           scroll_min_height=110)
+                                           scroll_min_height=150)
         self._h_panel.changed.connect(self._on_config_changed)
-        rv.addWidget(self._h_panel, 3)
+        rv.addWidget(self._h_panel, 1)
 
         split.addWidget(form_col)
 
@@ -656,6 +660,25 @@ class ProbeDialog(QDialog):
 
     def _save(self):
         self._save_form()
+        conflicts = histogram_parameter_conflicts(self._probes)
+        if conflicts:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("Inconsistent histogram settings")
+            box.setText(
+                "The same quantity type is scored with different histogram "
+                "settings across probes. Such histograms are drawn together "
+                "on one chart, and misaligned binning makes the comparison "
+                "misleading. Save anyway?")
+            box.setDetailedText("\n\n".join(conflicts))
+            back_btn = box.addButton("Back to edit",
+                                     QMessageBox.ButtonRole.RejectRole)
+            save_btn = box.addButton("Save anyway",
+                                     QMessageBox.ButtonRole.AcceptRole)
+            box.setDefaultButton(back_btn)
+            box.exec()
+            if box.clickedButton() is not save_btn:
+                return
         if self._task is not None:
             cfg = self._task.analysis_config or {}
             cfg[self.CONFIG_KEY] = {"probes": self._probes}

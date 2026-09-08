@@ -63,18 +63,28 @@ def parse_out_csv(path):
 
 
 def parse_h1_csv(path):
-    """rad4space_h1_<mesh>_<q>.csv (tools::histo h1d text dump) -> dict or
+    """rad4space_h1_<mesh>_<q>.csv (tools::histo::h1d text dump) -> dict or
     None.
 
-        #axis fixed <nbins> <xmin> <xmax>   (or '#axis log ...')
+    Real rad4space builds dump the FULL bin-edge list:
+
+        #class tools::histo::h1d
+        #title P1_q1
+        #dimension 1
+        #axis edges e0 e1 ... eN
+        #annotation axis_x.title ...
         #bin_number <nbins+2>
         entries,Sw,Sw2,Sxw0,Sx2w0
-        <underflow>
-        <bin rows...>
-        <overflow>
+        <underflow row>
+        <N bin rows>
+        <overflow row>
+
+    The edge spacing itself reveals the axis: constant difference -> linear,
+    constant ratio -> logarithmic (rad4space never prints '#axis log'). Legacy
+    G4-style '#axis fixed/log <nbins> <lo> <hi>' headers are also accepted.
 
     Returns {nbins, lo, hi, log, edges, centers, counts, total, underflow,
-    overflow, title}. Edges are linear for 'fixed' and logarithmic for 'log'.
+    overflow, title}.
     """
     header = {}
     counts = []
@@ -90,11 +100,19 @@ def parse_h1_csv(path):
                 if body.startswith("axis "):
                     kind, _, rest = body[5:].strip().partition(" ")
                     toks = rest.split()
-                    if len(toks) >= 3:
+                    if kind == "edges" and len(toks) >= 2:
+                        try:
+                            header["edges"] = [float(t) for t in toks]
+                        except ValueError:
+                            header["edges"] = []
+                    elif kind in ("fixed", "log") and len(toks) >= 3:
                         header["axis"] = kind
-                        header["nbins"] = int(toks[0])
-                        header["lo"] = float(toks[1])
-                        header["hi"] = float(toks[2])
+                        try:
+                            header["nbins"] = int(toks[0])
+                            header["lo"] = float(toks[1])
+                            header["hi"] = float(toks[2])
+                        except ValueError:
+                            pass
                 elif body.startswith("title "):
                     header["title"] = body.split(" ", 1)[1].strip()
                 continue
@@ -107,6 +125,15 @@ def parse_h1_csv(path):
                     counts.append(float(first))
                 except ValueError:
                     pass
+
+    edges = header.get("edges")
+    if edges and len(edges) >= 2:
+        header["nbins"] = len(edges) - 1
+        header["lo"], header["hi"] = edges[0], edges[-1]
+        header["axis"] = "log" if _edges_log_spaced(edges) else "fixed"
+    else:
+        edges = None
+
     nbins = header.get("nbins")
     lo, hi = header.get("lo", 0.0), header.get("hi", 1.0)
     if not nbins or nbins <= 0 or hi <= lo:
@@ -118,21 +145,42 @@ def parse_h1_csv(path):
     else:
         underflow, overflow = None, None
         counts = (counts + [0.0] * nbins)[:nbins]
-    if log:
-        import math
 
-        llo, lhi = math.log10(lo), math.log10(hi)
-        edges = [10.0 ** (llo + (lhi - llo) * i / nbins)
-                 for i in range(nbins + 1)]
-    else:
-        w = (hi - lo) / nbins
-        edges = [lo + w * i for i in range(nbins + 1)]
+    if edges is None:
+        edges = _axis_edges(lo, hi, nbins, log)
     centers = [(edges[i] + edges[i + 1]) * 0.5 for i in range(nbins)]
     return {"nbins": nbins, "lo": lo, "hi": hi, "log": log,
             "edges": edges, "centers": centers,
             "counts": counts, "total": sum(counts),
             "underflow": underflow, "overflow": overflow,
             "title": header.get("title", os.path.basename(path))}
+
+
+def _edges_log_spaced(edges):
+    """True when edges advance by a ~constant RATIO (log axis) rather than by
+    a constant difference (linear axis)."""
+    if len(edges) < 3 or edges[0] <= 0:
+        return False
+    d0 = edges[1] - edges[0]
+    if d0 and all(abs((b - a) / d0 - 1.0) <= 1e-3
+                  for a, b in zip(edges, edges[1:])):
+        return False  # constant spacing -> linear
+    r0 = edges[1] / edges[0]
+    return r0 != 1.0 and all(abs((b / a) / r0 - 1.0) <= 1e-3
+                             for a, b in zip(edges, edges[1:]))
+
+
+def _axis_edges(lo, hi, nbins, log):
+    """Reconstruct edges for G4-style '#axis fixed/log' dumps that carry only
+    nbins/lo/hi (real rad4space dumps list every edge and skip this)."""
+    if log and lo > 0:
+        import math
+
+        llo, lhi = math.log10(lo), math.log10(hi)
+        return [10.0 ** (llo + (lhi - llo) * i / nbins)
+                for i in range(nbins + 1)]
+    w = (hi - lo) / nbins
+    return [lo + w * i for i in range(nbins + 1)]
 
 
 def rebin_log(hist):

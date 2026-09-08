@@ -52,7 +52,14 @@ class ProbeResultChartDialog(QDialog):
         self._dark = bool(dark)
         self._series = group.get("series") or []
         self.setWindowTitle(title)
-        self.resize(1040, 700)
+        if self._group.get("kind") == "quantity":
+            # wider canvas once there are many bars so they never get
+            # squeezed (width grows with the probe count, capped on screen)
+            n = len(self._series)
+            wide = min(1560, max(560, 440 + n * 72))
+            self.resize(int(wide), 660)
+        else:
+            self.resize(1040, 700)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
         self._build_ui()
         if _MPL:
@@ -169,8 +176,9 @@ class ProbeResultChartDialog(QDialog):
 
     def _plot_quantity(self, ax):
         series = self._series
+        n = len(series)
         names = [s["probe"] for s in series]
-        dup = {n for n in names if names.count(n) > 1}
+        dup = {nm for nm in names if names.count(nm) > 1}
         labels = [f"{s['probe']} ({s['qname']})" if s["probe"] in dup
                   else s["probe"] for s in series]
         unit = next((s.get("unit") for s in series if s.get("unit")), "")
@@ -178,11 +186,19 @@ class ProbeResultChartDialog(QDialog):
                      color=self._fg(), fontsize=12)
         ax.set_ylabel(f"total [{unit}]" if unit else "total")
         ax.set_xlabel("probe")
-        xs = list(range(len(series)))
-        bars = ax.bar(xs, [s.get("value", 0.0) for s in series], width=0.55,
-                      color=[_CYCLE[i % len(_CYCLE)] for i in xs])
+        xs = list(range(n))
+        # fixed bar thickness: a lone bar stays slim, many bars keep a clean
+        # gap between neighbours
+        w = 0.5 if n == 1 else 0.42
+        ax.bar(xs, [s.get("value", 0.0) for s in series], width=w,
+               color=[_CYCLE[i % len(_CYCLE)] for i in xs])
         ax.set_xticks(xs)
-        ax.set_xticklabels(labels, fontsize=9)
+        rot = 30 if n > 8 else 0
+        ax.set_xticklabels(labels, fontsize=9,
+                           rotation=rot,
+                           ha="right" if rot else "center")
+        pad = (1.0 - w) / 2 + 0.18
+        ax.set_xlim(-pad, n - 1 + pad)
         ax.grid(axis="y", alpha=0.25 if self._dark else 0.5, linestyle="--")
         for xi, s in zip(xs, series):
             v = s.get("value", 0.0)
@@ -231,6 +247,9 @@ class ProbeResultChartDialog(QDialog):
             self, "Save chart", "probe_result.png",
             "PNG image (*.png)")
         if path:
-            self._canvas.figure.savefig(path, dpi=150,
-                                        facecolor=self._canvas.figure
-                                        .get_facecolor())
+            fig = self._canvas.figure
+            w = max(400, self._canvas.width())
+            h = max(300, self._canvas.height())
+            fig.set_size_inches(w / 100.0, h / 100.0)
+            fig.savefig(path, dpi=150,
+                        facecolor=fig.get_facecolor())
