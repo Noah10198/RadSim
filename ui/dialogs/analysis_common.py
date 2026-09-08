@@ -632,6 +632,14 @@ class QuantityListPanel(QWidget):
     changed = pyqtSignal()
     # Re-emitted from QuantityRowWidget.nameEdited: (old name, new name).
     nameEdited = pyqtSignal(str, str)
+    # A real click on "➕ Add quantity" (never set_quantities/add_row while
+    # loading a stored config): carries a snapshot of the row just added so
+    # dialogs can replicate it onto other selected logical volumes.
+    userAdded = pyqtSignal(object)
+    # A real click on a row's "✕" (never set_quantities while loading a
+    # stored config): carries the removed row index, so dialogs can remove
+    # the same row from the other selected logical volumes.
+    userRemoved = pyqtSignal(int)
 
     def __init__(self, parent=None, stretchable=False,
                  scroll_min_height=210):
@@ -650,7 +658,7 @@ class QuantityListPanel(QWidget):
         header.addWidget(QLabel("Quantity settings"))
         header.addStretch()
         add_btn = QPushButton("➕ Add quantity")
-        add_btn.clicked.connect(self.add_row)
+        add_btn.clicked.connect(self._on_add_clicked)
         header.addWidget(add_btn)
         v.addLayout(header)
 
@@ -682,7 +690,7 @@ class QuantityListPanel(QWidget):
             row.set_quantity({"name": gen_quantity_name(names),
                               "type": "energyDeposit", "filter": None})
         row.changed.connect(self.changed.emit)
-        row.removed.connect(self._on_row_removed)
+        row.removed.connect(lambda r=row: self._on_row_removed(r, user=True))
         row.nameEdited.connect(self.nameEdited.emit)
         self._rows.append(row)
         # Insert before the stretch item
@@ -690,11 +698,26 @@ class QuantityListPanel(QWidget):
             self._container_layout.count() - 1, row)
         self.changed.emit()
 
-    def _on_row_removed(self, row):
+    def _on_add_clicked(self):
+        """User pressed ➕ Add quantity: forward the freshly created row so a
+        dialog can replicate it onto the other selected logical volumes."""
+        self.add_row()
+        if self._rows:
+            self.userAdded.emit(self._rows[-1].get_quantity())
+
+    def _on_row_removed(self, row, user=False):
+        idx = -1
+        if user:
+            try:
+                idx = self._rows.index(row)
+            except ValueError:
+                idx = -1
         if row in self._rows:
             self._rows.remove(row)
         self._container_layout.removeWidget(row)
         row.deleteLater()
+        if user and idx >= 0:
+            self.userRemoved.emit(idx)
         self.changed.emit()
 
     def get_quantities(self) -> list:
@@ -880,6 +903,13 @@ class HistogramListPanel(QWidget):
     voxel)."""
 
     changed = pyqtSignal()
+    # A real click on "➕ Add histogram" (never set_histograms/add_row while
+    # loading a stored config): carries a snapshot of the row just added.
+    userAdded = pyqtSignal(object)
+    # A real click on a row's "✕" (never set_histograms while loading a
+    # stored config): carries the removed row index, so dialogs can remove
+    # the same row from the other selected logical volumes.
+    userRemoved = pyqtSignal(int)
 
     def __init__(self, parent=None, stretchable=False,
                  scroll_min_height=150):
@@ -898,7 +928,7 @@ class HistogramListPanel(QWidget):
         header.addWidget(QLabel("1D histogram"))
         header.addStretch()
         self._add_btn = QPushButton("➕ Add histogram")
-        self._add_btn.clicked.connect(self.add_row)
+        self._add_btn.clicked.connect(self._on_add_clicked)
         header.addWidget(self._add_btn)
         v.addLayout(header)
 
@@ -996,18 +1026,33 @@ class HistogramListPanel(QWidget):
             # defaulting to the first quantity.
             row.set_histogram({"q": self._next_free_qname()})
         row.changed.connect(self.changed.emit)
-        row.removed.connect(self._on_row_removed)
+        row.removed.connect(lambda r=row: self._on_row_removed(r, user=True))
         self._rows.append(row)
         self._container_layout.insertWidget(
             self._container_layout.count() - 1, row)
         self._refresh_add_state()
         self.changed.emit()
 
-    def _on_row_removed(self, row):
+    def _on_add_clicked(self):
+        """User pressed ➕ Add histogram: forward the freshly created row so a
+        dialog can replicate it onto the other selected logical volumes."""
+        self.add_row()
+        if self._rows:
+            self.userAdded.emit(self._rows[-1].get_histogram())
+
+    def _on_row_removed(self, row, user=False):
+        idx = -1
+        if user:
+            try:
+                idx = self._rows.index(row)
+            except ValueError:
+                idx = -1
         if row in self._rows:
             self._rows.remove(row)
         self._container_layout.removeWidget(row)
         row.deleteLater()
+        if user and idx >= 0:
+            self.userRemoved.emit(idx)
         self._refresh_add_state()
         self.changed.emit()
 

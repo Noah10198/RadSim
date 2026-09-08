@@ -1,12 +1,13 @@
-"""Chart-based probe result reading + grouping (no Qt/matplotlib imports,
+"""Chart-based scoring-result reading + grouping (no Qt/matplotlib imports,
 so project-tree building stays light).
 
-rad4space writes per probe P: ONE out_P.csv with every quantity's integrated
-value (each in its own "# primitive scorer name" block), plus one
-rad4space_h1_P_qx.csv per configured 1-D histogram. A quantity only means
-something compared across probes, therefore values/histograms are grouped by
-physical quantity TYPE (from the saved probe config - never by the arbitrary
-per-probe q-name), e.g. the doseDeposit of P1/P2/P3 share one group.
+rad4space writes per scored mesh M (a probe P or a realworld logical volume):
+ONE out_M.csv with every quantity's integrated value (each in its own
+"# primitive scorer name" block), plus one rad4space_h1_M_qx.csv per
+configured 1-D histogram. A quantity only means something compared across
+meshes of the same kind, therefore values/histograms are grouped by physical
+quantity TYPE (from the saved analysis config - never by the arbitrary
+per-entity q-name), e.g. the doseDeposit of P1/P2/P3 share one group.
 
 Groups are pure data; plotting happens in probe_chart_dialog.py.
 """
@@ -199,23 +200,25 @@ def rebin_log(hist):
 
 
 # ----------------------------------------------------------------------
-# cross-probe grouping by quantity type
+# cross-entity grouping by quantity type (probes, logical volumes, ...)
 # ----------------------------------------------------------------------
 
 def _type_unit_label(qtype, unit):
     return f"{qtype} [{unit}]" if unit else qtype
 
 
-def build_probe_result_groups(probes, work_dir):
-    """Group the probe outputs of one finished run by physical quantity type.
+def build_result_groups(entities, work_dir):
+    """Group the scoring outputs of one finished run by physical quantity type.
 
-    probes   : saved probe config list (task.analysis_config["probe"]).
-    work_dir : task run directory (out_*.csv, rad4space_h1_*.csv dumps).
+    entities : list of {"name", "qs", "hs"} - one entry per scored mesh
+        (a probe or a realworld logical volume). File names are derived from
+        the entry name: out_<name>.csv + rad4space_h1_<name>_<q>.csv.
+    work_dir : task run directory holding those dump files.
 
     Returns {"quantity": [group...], "histogram": [group...]} with each group
     {"kind", "label", "series": [...]}:
-      quantity series : {probe, qname, unit, value, entry}
-      histogram series: {probe, qname, xunit, hist, cfg}
+      quantity series : {entity, qname, unit, value, entry}
+      histogram series: {entity, qname, xunit, hist, cfg}
     Missing/unparsable files drop their series; empty groups are removed.
     """
     from ui.dialogs.analysis_common import quantity_meta
@@ -228,14 +231,14 @@ def build_probe_result_groups(probes, work_dir):
                     "series": []})
         grp["series"].append(series)
 
-    for p in probes or []:
-        pname = str(p.get("name") or "").strip()
-        if not pname:
+    for e in entities or []:
+        ename = str(e.get("name") or "").strip()
+        if not ename:
             continue
-        qmeta = {str(q.get("name") or ""): q for q in (p.get("qs") or [])}
+        qmeta = {str(q.get("name") or ""): q for q in (e.get("qs") or [])}
 
-        # ---- integrated values: out_<probe>.csv ----
-        out_path = os.path.join(work_dir, f"out_{pname}.csv")
+        # ---- integrated values: out_<name>.csv ----
+        out_path = os.path.join(work_dir, f"out_{ename}.csv")
         blocks = parse_out_csv(out_path)["blocks"] if os.path.isfile(
             out_path) else []
         for b in blocks:
@@ -243,11 +246,11 @@ def build_probe_result_groups(probes, work_dir):
             if q is None:
                 continue
             _add(qgroups, str(q.get("type") or "energyDeposit"), b["unit"],
-                 {"probe": pname, "qname": b["name"], "unit": b["unit"],
+                 {"entity": ename, "qname": b["name"], "unit": b["unit"],
                   "value": b["value"], "entry": b["entry"]})
 
-        # ---- 1-D histograms: rad4space_h1_<probe>_<q>.csv ----
-        for h in (p.get("hs") or []):
+        # ---- 1-D histograms: rad4space_h1_<name>_<q>.csv ----
+        for h in (e.get("hs") or []):
             qname = str(h.get("q") or "")
             q = qmeta.get(qname)
             if q is None:
@@ -256,14 +259,14 @@ def build_probe_result_groups(probes, work_dir):
             xunit = quantity_meta(qtype)[1]
             if not xunit:
                 continue
-            hpath = os.path.join(work_dir, f"rad4space_h1_{pname}_{qname}.csv")
+            hpath = os.path.join(work_dir, f"rad4space_h1_{ename}_{qname}.csv")
             hist = parse_h1_csv(hpath) if os.path.isfile(hpath) else None
             if hist is None:
                 continue
             if h.get("log") and not hist["log"]:
                 hist = rebin_log(hist)
             _add(hgroups, qtype, xunit,
-                 {"probe": pname, "qname": qname, "xunit": xunit,
+                 {"entity": ename, "qname": qname, "xunit": xunit,
                   "hist": hist, "cfg": dict(h)})
 
     def _finalise(groups, kind):
@@ -273,6 +276,17 @@ def build_probe_result_groups(probes, work_dir):
 
     return {"quantity": _finalise(qgroups, "quantity"),
             "histogram": _finalise(hgroups, "histogram")}
+
+
+def build_probe_result_groups(probes, work_dir):
+    """Probe convenience wrapper around build_result_groups.
+
+    probes   : saved probe config list (task.analysis_config["probe"]).
+    work_dir : task run directory (out_*.csv, rad4space_h1_*.csv dumps).
+    """
+    return build_result_groups(
+        [{"name": p.get("name"), "qs": p.get("qs"), "hs": p.get("hs")}
+         for p in (probes or [])], work_dir)
 
 
 def find_group(groups, kind, label):

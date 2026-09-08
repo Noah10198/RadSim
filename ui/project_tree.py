@@ -516,6 +516,19 @@ class ProjectTreeWidget(QWidget):
                 return parent.child(i)
         return None
 
+    @classmethod
+    def _task_name_of(cls, item: QTreeWidgetItem) -> str:
+        """Name of the task a tree item belongs to ("" when the item is not
+        under a task node). Walks up to the direct child of the Tasks root."""
+        node = item
+        while node is not None:
+            if node.parent() is not None and node.parent().data(
+                    0, TASK_CTX_ROLE) == CTX_TASKS:
+                return (node.data(0, Qt.ItemDataRole.UserRole)
+                        or node.text(0) or "").strip()
+            node = node.parent()
+        return ""
+
     @staticmethod
     def _find_child_by_data(parent: QTreeWidgetItem, role: int, value):
         for i in range(parent.childCount()):
@@ -585,6 +598,9 @@ class ProjectTreeWidget(QWidget):
                            lambda: self.task_context.emit("rename_task", task_name))
             menu.addAction("📋 Duplicate Task",
                            lambda: self.task_context.emit("duplicate_task", task_name))
+            menu.addAction("📂 Open Results Folder",
+                           lambda: self.task_context.emit("open_result_folder",
+                                                          task_name))
             menu.addAction("❌ Delete Task",
                            lambda: self.task_context.emit("delete_task", task_name))
         elif ctx == CTX_ANALYSIS:
@@ -593,6 +609,11 @@ class ProjectTreeWidget(QWidget):
                            lambda: self.task_context.emit("configure_analysis", action))
         elif ctx == CTX_RESULT:
             action = item.data(0, TASK_ACTION_ROLE) or ""
+            task_name = self._task_name_of(item)
+            if task_name:
+                menu.addAction("📂 Open Folder",
+                               lambda: self.task_context.emit("open_result_folder",
+                                                              task_name))
             if action.startswith("result:"):
                 menu.addAction("👁 View Result",
                                lambda: self.task_context.emit("view_result", action))

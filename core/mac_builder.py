@@ -321,7 +321,7 @@ def build_mac_text(gdml_full_path: str, task) -> str:
     lines += pcfg.macro_lines(task.physics)
     # 4. initialize (options freeze here)
     lines += ["", "# initialize (run options are frozen from this point)",
-              "/rad4space/initialize"]
+              "/run/initialize"]
     # 5. primary source
     lines += ["", "# primary particle source"]
     src_lines = gps.macro_lines(task.particle or {})

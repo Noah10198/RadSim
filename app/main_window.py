@@ -18,14 +18,14 @@ from PyQt6.QtWidgets import (
     QMessageBox, QDockWidget, QToolBar, QStackedWidget, QApplication,
     QDialog, QPlainTextEdit, QPushButton, QHBoxLayout, QVBoxLayout,
 )
-from PyQt6.QtCore import Qt, QThread, QObject, pyqtSignal
-from PyQt6.QtGui import QPalette, QColor, QFont
+from PyQt6.QtCore import Qt, QThread, QObject, QUrl, pyqtSignal
+from PyQt6.QtGui import QPalette, QColor, QFont, QDesktopServices
 
 from core.gdml_agent import GdmlAgent
 from core.project_io import save_project, load_project
 from core.run_manager import RunManager, RunTask
 from core.mac_builder import DEFAULT_EVENTS, active_kinds
-from core.solver_config import get_solver_path
+from core.solver_config import get_results_root, get_solver_path
 from utils.logger import AsyncLogger, LogLevel
 from ui.ribbon_toolbar import RibbonToolBar
 from ui.project_tree import ProjectTreeWidget
@@ -41,7 +41,10 @@ from ui.dialogs.particle_dialog import ParticleDialog
 from ui.dialogs.physics_dialog import PhysicsDialog
 from ui.dialogs.result_viewer import ResultViewerDialog
 from ui.voxel_result_viewer import VoxelResultViewer
-from ui.probe_result_viewer import build_probe_result_groups, find_group
+from ui.trajectory_viewer import TrajectoryViewerDialog
+from ui.probe_result_viewer import (
+    build_probe_result_groups, build_result_groups, find_group,
+)
 from ui.probe_chart_dialog import ProbeResultChartDialog
 
 
@@ -49,11 +52,9 @@ from ui.probe_chart_dialog import ProbeResultChartDialog
 # window responsive (same approach as gdmleditor)
 _LARGE_FILE_THRESHOLD = 500_000
 
-# Output root for each run: out_root/<task>/run.mac + result csvs. Points at the
-# repo's solver/runs folder (sibling of the solver sources).
-_RUNS_ROOT = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "solver", "runs")
+# Output root for each run: out_root/<task>/run.mac + result csvs. Configurable
+# in the Solver Setting dialog; default: repo's solver/runs folder
+# (see core.solver_config.get_results_root).
 
 
 class _LogViewerDialog(QDialog):
@@ -188,6 +189,7 @@ class MainWindow(QMainWindow):
         self._gdml_paths: list[str] = []  # real paths of imported GDML (for project save)
         self._analysis_dialogs: dict[tuple, object] = {}  # (task, kind) -> dialog
         self._voxel_viewers: dict[tuple, object] = {}  # (task, qname) -> viewer
+        self._traj_viewers: dict[str, object] = {}    # task -> trajectory viewer dialog
         self._particle_dialogs: dict[tuple, object] = {}  # ("particle", task) -> dialog
         self._physics_dialogs: dict[tuple, object] = {}   # ("physics", task) -> dialog
         self._calculate_dialogs: dict[tuple, object] = {} # ("calculate", task) -> dialog
@@ -318,6 +320,11 @@ class MainWindow(QMainWindow):
         # Voxel quantity preview windows stay open while the theme toggles, so
         # push the new theme into every cached viewer as well.
         for dlg in list(self._voxel_viewers.values()):
+            try:
+                dlg.set_dark_theme(self._dark_theme)
+            except Exception:
+                pass
+        for dlg in list(self._traj_viewers.values()):
             try:
                 dlg.set_dark_theme(self._dark_theme)
             except Exception:
@@ -549,7 +556,7 @@ class MainWindow(QMainWindow):
         manager stays in simulated mode (its fallback)."""
         gdml = self._gdml_paths[0] if self._gdml_paths else None
         exe = get_solver_path() if gdml else None
-        self._run_manager.configure_solver(exe, gdml, _RUNS_ROOT)
+        self._run_manager.configure_solver(exe, gdml, get_results_root())
 
     # ---- Large-file background parsing (ported from gdmleditor) ----
 
@@ -776,9 +783,18 @@ class MainWindow(QMainWindow):
         if dlg is None:
             dlg = SolverSettingDialog(self)
             dlg.set_dark_theme(self._dark_theme)
+            dlg.settings_saved.connect(self._on_solver_setting_saved)
             self._solver_dialog = dlg
         dlg.show()
         dlg.raise_()
+
+    def _on_solver_setting_saved(self):
+        """The solver/results-root settings were saved: point the run manager
+        at the (possibly new) executable + results root, then re-scan each
+        task's output folder so the Results subtree matches the disk."""
+        self._refresh_solver()
+        for task in list(self._run_manager._tasks.values()):
+            self._restore_task_outputs(task)
 
     def _on_task_action(self, payload: str):
         """A project-tree task node was clicked
@@ -1090,6 +1106,26 @@ class MainWindow(QMainWindow):
         elif action == "view_result":
             _, _, ref = payload.partition(":")
             self._on_result_activated(ref)
+        elif action == "open_result_folder":
+            self._open_task_folder(payload)
+
+    def _open_task_folder(self, task_name: str) -> None:
+        """Right-click "Open Folder": reveal a task's run output directory in
+        the OS file manager (the folder holding run.mac / run.log / csvs)."""
+        task = self._run_manager.get_task(task_name)
+        work = self._result_work_dir(task)
+        if work is not None and os.path.isdir(work):
+            if QDesktopServices.openUrl(QUrl.fromLocalFile(work)):
+                self._logger.log_system(
+                    f"[{task_name}] opened output folder: {work}")
+                return
+        expected = (os.path.join(get_results_root(), task_name)
+                    if task is not None and task.name else "")
+        QMessageBox.information(
+            self, "Open Result Folder",
+            f"Task '{task_name}' has no output folder yet.\n\n"
+            f"Expected location:\n{expected or '(unknown)'}\n\n"
+            "The folder is created when the task runs.")
 
     def _rename_task(self, old_name: str):
         from PyQt6.QtWidgets import QInputDialog
@@ -1254,6 +1290,7 @@ class MainWindow(QMainWindow):
             # Any preview window that stayed open across the run must switch to
             # the freshly dumped CSV instead of the previous run's field.
             self._refresh_open_voxel_previews(name, task)
+            self._refresh_open_traj_viewers(name, task)
         elif task and task.run_log and os.path.isfile(task.run_log):
             # failed / stopped run: keep any earlier results, just surface the
             # console log if the solver wrote one
@@ -1276,6 +1313,10 @@ class MainWindow(QMainWindow):
         work = self._result_work_dir(task)
         if work and os.path.isfile(os.path.join(work, "run.log")):
             self._project_tree.add_task_result(name, "run log")
+        # New rad4space solver also writes Traj.csv next to run.log; surface it
+        # right after the log (before any analysis result group).
+        if work and os.path.isfile(os.path.join(work, "Traj.csv")):
+            self._project_tree.add_task_result(name, "trajectory display")
         if task is None:
             return
         kinds = active_kinds(task.analysis_config or {})
@@ -1292,6 +1333,10 @@ class MainWindow(QMainWindow):
             if kind == "probe":
                 if self._kind_dump_exists(work, task, kind):
                     self._add_probe_result_group(name, task)
+                continue
+            if kind == "realworld":
+                if self._kind_dump_exists(work, task, kind):
+                    self._add_realworld_result_group(name, task)
                 continue
             if self._kind_dump_exists(work, task, kind):
                 label = labels.get(kind, kind) + " result"
@@ -1383,6 +1428,57 @@ class MainWindow(QMainWindow):
         self._project_tree.add_task_result_tree(name, "probe result", children)
         self._logger.log_system(
             f"[{name}] probe result ready: "
+            + ", ".join(f"{t} ({len(n)})" for _k, t, n in children))
+
+    def _realworld_entities(self, task) -> list:
+        """Saved real world config {LV: {qs, hs}} -> the generic entity list
+        ({name, qs, hs}) that build_result_groups expects."""
+        rcfg = ((task.analysis_config or {}).get("realworld") or {})
+        volumes = rcfg.get("volumes") or {}
+        return [{"name": lv, "qs": (v or {}).get("qs", []),
+                 "hs": (v or {}).get("hs", [])}
+                for lv, v in volumes.items()]
+
+    def _add_realworld_result_group(self, name: str, task) -> None:
+        """Expose real world (logical volume) results as comparison charts,
+        mirroring the probe result tree:
+
+            real world result
+            ├── quantity                # one chart leaf per quantity type
+            │   └── doseDeposit [Gy]    # bar chart: one bar per logical volume
+            └── histogram               # one chart leaf per histogram type
+                └── doseDeposit [Gy]    # overlaid step curves across volumes
+
+        Groups are built from the saved volume config + the dump files that
+        actually exist in the run dir (out_<LV>.csv,
+        rad4space_h1_<LV>_<q>.csv). When a volume dump exists but nothing
+        parses into a group (e.g. the volume config was edited after the run)
+        a plain "real world result" leaf is kept so the generic file viewer
+        stays reachable."""
+        work = self._result_work_dir(task)
+        if work is None:
+            self._project_tree.add_task_result(name, "real world result")
+            return
+        entities = self._realworld_entities(task)
+        groups = build_result_groups(entities, work)
+        children = []
+        q_nodes = [("leaf", g["label"], f"result:{name}:rq:{g['label']}")
+                   for g in groups["quantity"]]
+        h_nodes = [("leaf", g["label"], f"result:{name}:rh:{g['label']}")
+                   for g in groups["histogram"]]
+        if q_nodes:
+            children.append(("group", "quantity", q_nodes))
+        if h_nodes:
+            children.append(("group", "histogram", h_nodes))
+        if not children:
+            self._project_tree.add_task_result(name, "real world result")
+            return
+        # A real world run supersedes an earlier plain "default result" leaf.
+        self._project_tree.remove_task_result(name, "default result")
+        self._project_tree.add_task_result_tree(
+            name, "real world result", children)
+        self._logger.log_system(
+            f"[{name}] real world result ready: "
             + ", ".join(f"{t} ({len(n)})" for _k, t, n in children))
 
     def _refresh_open_voxel_previews(self, task_name: str, task) -> None:
@@ -1489,6 +1585,9 @@ class MainWindow(QMainWindow):
         if label.startswith("pq:") or label.startswith("ph:"):
             self._open_probe_result_chart(task_name, label)
             return
+        if label.startswith("rq:") or label.startswith("rh:"):
+            self._open_realworld_result_chart(task_name, label)
+            return
         task = self._run_manager.get_task(task_name)
         if label == "run log":
             if task and task.run_log and os.path.isfile(task.run_log):
@@ -1501,6 +1600,9 @@ class MainWindow(QMainWindow):
                 f"No run.log for '{task_name}'.\n\n"
                 "The solver console output was not saved, or the task has "
                 "not been executed with the real rad4space solver yet.")
+            return
+        if label == "trajectory display":
+            self._open_trajectory_viewer(task_name)
             return
         work = self._result_work_dir(task)
         if work is None:
@@ -1601,6 +1703,40 @@ class MainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
+    def _open_realworld_result_chart(self, task_name: str, label: str) -> None:
+        """Open one real world comparison chart. label is either
+        'rq:<quantity-type label>' or 'rh:<histogram-type label>' - it names
+        the chart group by the exact label text shown on the tree leaf."""
+        kind = "quantity" if label.startswith("rq:") else "histogram"
+        payload = label.split(":", 1)[1]
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            return
+        work = self._result_work_dir(task)
+        if work is None:
+            QMessageBox.information(
+                self, "Real world Result",
+                f"No solver output directory found for '{task_name}'.")
+            return
+        entities = self._realworld_entities(task)
+        groups = build_result_groups(entities, work)
+        grp = find_group(groups, kind, payload)
+        if grp is None:
+            QMessageBox.information(
+                self, "Real world Result",
+                f"No {kind} group '{payload}' found for '{task_name}'.\n\n"
+                "The dump files in the run directory may no longer match the "
+                "saved real world configuration.")
+            return
+        dlg = ProbeResultChartDialog(
+            f"Real world {kind} - {task_name} ({payload})", grp,
+            dark=self._dark_theme, parent=self, entity_label="logical volume")
+        self._logger.log_system(
+            f"[{task_name}] opening real world {kind} chart: {payload}")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def _open_voxel_result(self, task_name: str, qname: str) -> None:
         task = self._run_manager.get_task(task_name)
         if task is None:
@@ -1655,10 +1791,109 @@ class MainWindow(QMainWindow):
         dlg.raise_()
         dlg.activateWindow()
 
+    # -- trajectory display -----------------------------------------------------
+
+    def _trajectory_gdml_root(self, task):
+        """Geometry root node for a trajectory preview (or None).
+
+        Prefers the geometry already imported in the main view (consistent
+        with the voxel previews). If none was imported but the task's run.mac
+        embeds an absolute GDML path, parse that file so a project reloaded
+        from disk (or a task run on a different machine) still previews the
+        exact geometry it was scored on. Returns None when neither exists.
+        """
+        root = self._gdml_agent.get_root_node()
+        if root is not None:
+            return root
+        path = self._run_gdml_path(task)
+        if path:
+            try:
+                node, _msg = GdmlAgent().parse_file_only(path)
+                if node is not None:
+                    return node
+            except Exception as exc:  # pragma: no cover - defensive
+                self._logger.log_system(f"trajectory gdml fallback failed: {exc}")
+        return None
+
+    @staticmethod
+    def _run_gdml_path(task) -> str:
+        """Absolute GDML path embedded in the task's run.mac, if any."""
+        if task is None:
+            return ""
+        mac = os.path.join(os.path.dirname(task.run_log or ""), "run.mac")
+        if not os.path.isfile(mac):
+            return ""
+        try:
+            with open(mac, "r", encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if s.startswith("/rad4space/gdml/SetGDMLFile"):
+                        path = s.split(None, 1)[1].strip().strip('"').strip("'")
+                        return path if os.path.isfile(path) else ""
+        except OSError:
+            pass
+        return ""
+
+    def _refresh_open_traj_viewers(self, task_name: str, task) -> None:
+        """Reload still-open trajectory viewers of a just-finished task."""
+        dlg = self._traj_viewers.get(task_name)
+        if dlg is None or task is None:
+            return
+        work = self._result_work_dir(task)
+        path = os.path.join(work, "Traj.csv") if work else ""
+        if not os.path.isfile(path):
+            return
+        try:
+            if dlg.refresh_if_changed(path):
+                self._logger.log_system(
+                    f"[{task_name}] trajectory preview reloaded")
+        except Exception:
+            pass
+
+    def _open_trajectory_viewer(self, task_name: str) -> None:
+        task = self._run_manager.get_task(task_name)
+        if task is None:
+            return
+        work = self._result_work_dir(task)
+        if work is None:
+            QMessageBox.information(
+                self, "Trajectory Display",
+                f"No solver output directory found for '{task_name}'.")
+            return
+        traj_path = os.path.join(work, "Traj.csv")
+        if not os.path.isfile(traj_path):
+            QMessageBox.information(
+                self, "Trajectory Display",
+                f"No trajectory file for '{task_name}'.\n\n"
+                f"Expected file:\n{traj_path}")
+            return
+        root = self._trajectory_gdml_root(task)
+        if root is None:
+            QMessageBox.information(
+                self, "Trajectory Display",
+                "No geometry to draw the trajectories on.\n\n"
+                "Import the GDML geometry this task ran on (Project tree "
+                "-> Import GDML) and try again.")
+            return
+        dlg = self._traj_viewers.get(task_name)
+        if dlg is None:
+            dlg = TrajectoryViewerDialog(
+                title=f"Trajectories - {task_name}", root_node=root,
+                traj_path=traj_path, dark=self._dark_theme, parent=self)
+            dlg.destroyed.connect(
+                lambda _o, n=task_name, d=dlg: self._traj_viewers.pop(n, None)
+                if self._traj_viewers.get(n) is d else None)
+            self._traj_viewers[task_name] = dlg
+            self._logger.log_system(
+                f"[{task_name}] trajectory display opened: {traj_path}")
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
     def _result_work_dir(self, task) -> Optional[str]:
         """Run output directory of a finished task: the folder holding run.mac,
         run.log and the out_*.csv scoring dumps. Prefers the real run dir the
-        manager logged, then the conventional solver/runs/<task> location."""
+        manager logged, then the configured results root / <task> location."""
         if task is None:
             return None
         if task.run_log:
@@ -1666,7 +1901,7 @@ class MainWindow(QMainWindow):
             if os.path.isdir(d):
                 return d
         if task.name:
-            cand = os.path.join(_RUNS_ROOT, task.name)
+            cand = os.path.join(get_results_root(), task.name)
             if os.path.isdir(cand):
                 return cand
         return None

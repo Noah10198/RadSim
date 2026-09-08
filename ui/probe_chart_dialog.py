@@ -1,13 +1,15 @@
-"""ProbeResultChartDialog - one matplotlib comparison chart per probe result
-group.
+"""ProbeResultChartDialog - one matplotlib comparison chart per result group
+(probe probes and realworld logical volumes share the same dialog).
 
-* quantity group : bar per (probe, quantity) of the same physical type, so
-  e.g. the energyDeposit measured by P1/P2/P3 sit side by side.
-* histogram group: one step curve per probe histogram of the same type on a
-  single axis, with optional per-probe normalisation.
+* quantity group : bar per (entity, quantity) of the same physical type, so
+  e.g. the doseDeposit measured by several entities sit side by side.
+* histogram group: one step curve per entity histogram of the same type on a
+  single axis, with optional per-entity normalisation.
 
-The group payload comes from probe_result_viewer.build_probe_result_groups.
-If matplotlib is missing the dialog shows an install hint.
+The group payload comes from probe_result_viewer.build_result_groups. The
+dialog itself is entity-agnostic - entity_label only words the axis title and
+the default export file name. If matplotlib is missing it shows an install
+hint.
 """
 
 try:
@@ -46,10 +48,12 @@ def _fmt(v) -> str:
 class ProbeResultChartDialog(QDialog):
     """One comparison chart for one probe result group."""
 
-    def __init__(self, title, group, dark=False, parent=None):
+    def __init__(self, title, group, dark=False, parent=None,
+                 entity_label="probe"):
         super().__init__(parent)
         self._group = group
         self._dark = bool(dark)
+        self._entity_label = entity_label
         self._series = group.get("series") or []
         self.setWindowTitle(title)
         if self._group.get("kind") == "quantity":
@@ -77,15 +81,6 @@ class ProbeResultChartDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
-        kind_txt = ("quantity comparison" if
-                    self._group.get("kind") == "quantity"
-                    else "histogram comparison")
-        head = QLabel(f"{kind_txt} — {self._group.get('label', '')}\n"
-                      + self._summary_text())
-        head.setWordWrap(True)
-        head.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        lay.addWidget(head)
-
         if _MPL:
             self._canvas = FigureCanvasQTAgg(Figure())
             self._canvas_host = self._canvas
@@ -118,25 +113,11 @@ class ProbeResultChartDialog(QDialog):
         bar.addWidget(close_btn)
         lay.addLayout(bar)
 
-    def _summary_text(self) -> str:
-        lines = []
-        for s in self._series:
-            if self._group.get("kind") == "quantity":
-                unit = s.get("unit")
-                lines.append(f"  • {s['probe']} ({s['qname']}): "
-                             f"{_fmt(s.get('value'))}"
-                             + (f" {unit}" if unit else "")
-                             + f"    entries {_fmt(s.get('entry'))}")
-            else:
-                h = s.get("hist", {})
-                lines.append(f"  • {s['probe']} ({s['qname']}): "
-                             f"{_fmt(h.get('total', 0))} counts in "
-                             f"{h.get('nbins', 0)} bins"
-                             + (f", underflow {_fmt(h.get('underflow', 0))}"
-                                if h.get("underflow") else ""))
-        more = len(lines) - 10
-        return "\n".join(lines[:10]) + (f"\n  … and {more} more" if more > 0
-                                        else "")
+    def _entity_name(self, s) -> str:
+        """Series holder label: 'entity' for groups built by
+        probe_result_viewer.build_result_groups, 'probe' for groups produced
+        by an older build_probe_result_groups."""
+        return str(s.get("entity") or s.get("probe") or "?")
 
     # -------------------------------------------------------- theme --
 
@@ -174,18 +155,38 @@ class ProbeResultChartDialog(QDialog):
     def _fg(self):
         return _DARK_FG if self._dark else _LIGHT_FG
 
+    @staticmethod
+    def _xtick_angle(labels) -> int:
+        """x-label angle (degrees) that keeps neighbouring ticks apart.
+
+        Entity names are often long (realworld logical volumes like
+        as1-oc-214_Solid_1_vol), so a pure tick-count threshold (rotate only
+        once there are 8+ bars) still lets a handful of long labels overlap.
+        Combine both signals: short names stay horizontal, mid-length names
+        tilt 30 deg, longer ones (or many ticks) turn 45 deg right-aligned -
+        the usual sweet spot. 90 deg wastes vertical space and reads badly,
+        so it is intentionally not used.
+        """
+        longest = max((len(x) for x in labels), default=0)
+        if longest >= 12 or len(labels) > 12:
+            return 45
+        if longest > 6 or len(labels) > 8:
+            return 30
+        return 0
+
     def _plot_quantity(self, ax):
         series = self._series
         n = len(series)
-        names = [s["probe"] for s in series]
+        names = [self._entity_name(s) for s in series]
         dup = {nm for nm in names if names.count(nm) > 1}
-        labels = [f"{s['probe']} ({s['qname']})" if s["probe"] in dup
-                  else s["probe"] for s in series]
+        labels = [f"{self._entity_name(s)} ({s['qname']})"
+                  if self._entity_name(s) in dup
+                  else self._entity_name(s) for s in series]
         unit = next((s.get("unit") for s in series if s.get("unit")), "")
-        ax.set_title(f"{self._group.get('label')} — total per probe",
-                     color=self._fg(), fontsize=12)
+        ax.set_title(f"{self._group.get('label')} — total per "
+                     f"{self._entity_label}", color=self._fg(), fontsize=12)
         ax.set_ylabel(f"total [{unit}]" if unit else "total")
-        ax.set_xlabel("probe")
+        ax.set_xlabel(self._entity_label)
         xs = list(range(n))
         # fixed bar thickness: a lone bar stays slim, many bars keep a clean
         # gap between neighbours
@@ -193,10 +194,10 @@ class ProbeResultChartDialog(QDialog):
         ax.bar(xs, [s.get("value", 0.0) for s in series], width=w,
                color=[_CYCLE[i % len(_CYCLE)] for i in xs])
         ax.set_xticks(xs)
-        rot = 30 if n > 8 else 0
-        ax.set_xticklabels(labels, fontsize=9,
-                           rotation=rot,
-                           ha="right" if rot else "center")
+        rot = self._xtick_angle(labels)
+        ax.set_xticklabels(labels, fontsize=9, rotation=rot,
+                           ha="right" if rot else "center",
+                           rotation_mode="anchor")
         pad = (1.0 - w) / 2 + 0.18
         ax.set_xlim(-pad, n - 1 + pad)
         ax.grid(axis="y", alpha=0.25 if self._dark else 0.5, linestyle="--")
@@ -210,7 +211,7 @@ class ProbeResultChartDialog(QDialog):
         norm = bool(self._norm_cb.isChecked()) if self._norm_cb else False
         logx = bool(self._log_cb.isChecked()) if self._log_cb else False
         total = sum((s.get("hist", {}).get("total") or 0) for s in self._series)
-        ax.set_title(f"{self._group.get('label')} — histogram comparison",
+        ax.set_title(f"{self._group.get('label')}",
                      color=self._fg(), fontsize=12)
         ax.set_ylabel("counts per bin" if not norm else "% of total counts")
         xunit = next((s.get("xunit") for s in self._series if s.get("xunit")),
@@ -218,7 +219,7 @@ class ProbeResultChartDialog(QDialog):
         ax.set_xlabel(f"[{xunit}]" if xunit else "value")
         if logx:
             ax.set_xscale("log")
-        names = [s["probe"] for s in self._series]
+        names = [self._entity_name(s) for s in self._series]
         dup = {n for n in names if names.count(n) > 1}
         for i, s in enumerate(self._series):
             h = s.get("hist") or {}
@@ -230,8 +231,8 @@ class ProbeResultChartDialog(QDialog):
                 ys = [c / total * 100.0 for c in ys]
             xs = list(edges)
             ys_ = list(ys) + [ys[-1] if ys else 0.0]
-            label = f"{s['probe']} ({s['qname']})" if s["probe"] in dup \
-                else s["probe"]
+            ename = self._entity_name(s)
+            label = f"{ename} ({s['qname']})" if ename in dup else ename
             ax.step(xs, ys_, where="post", color=_CYCLE[i % len(_CYCLE)],
                     label=label, lw=1.6)
         if self._series:
@@ -244,7 +245,7 @@ class ProbeResultChartDialog(QDialog):
         if not _MPL or self._canvas is None:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save chart", "probe_result.png",
+            self, "Save chart", f"{self._entity_label}_result.png",
             "PNG image (*.png)")
         if path:
             fig = self._canvas.figure

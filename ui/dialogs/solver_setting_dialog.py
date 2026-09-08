@@ -12,13 +12,16 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QFileDialog,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from core.solver_config import (
-    get_qt_bin_dir, get_solver_path, set_qt_bin_dir, set_solver_path)
+    default_results_root, get_qt_bin_dir, get_results_root, get_solver_path,
+    set_qt_bin_dir, set_results_root, set_solver_path)
 
 
 class SolverSettingDialog(QDialog):
+
+    settings_saved = pyqtSignal()   # emitted after a successful Save
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -80,10 +83,34 @@ class SolverSettingDialog(QDialog):
         self._qt_info.setStyleSheet("color: #888888; font-size: 11px;")
         layout.addWidget(self._qt_info)
 
+        res_title = QLabel("Results output folder")
+        res_title.setStyleSheet("font-size: 13px; font-weight: bold;")
+        res_title.setToolTip(
+            "Parent folder that receives one subfolder per task run "
+            "(<root>/<task>/run.mac + result csvs).")
+        layout.addWidget(res_title)
+
+        res_row = QHBoxLayout()
+        self._res_edit = QLineEdit()
+        self._res_edit.setText(get_results_root())
+        self._res_edit.setPlaceholderText(get_results_root())
+        res_row.addWidget(self._res_edit, 1)
+
+        res_browse_btn = QPushButton("Browse…")
+        res_browse_btn.clicked.connect(self._on_browse_results)
+        res_row.addWidget(res_browse_btn)
+        layout.addLayout(res_row)
+
+        self._res_info = QLabel("")
+        self._res_info.setWordWrap(True)
+        self._res_info.setStyleSheet("color: #888888; font-size: 11px;")
+        layout.addWidget(self._res_info)
+
         note = QLabel(
-            "Empty fields fall back to the auto-detected paths. Publishing "
-            "tip: copy the solver's Qt/Geant4 DLLs next to rad4space.exe and "
-            "this Qt setting becomes unnecessary.")
+            "Empty fields fall back to the auto-detected paths (results: the "
+            "repository's solver/runs folder). Publishing tip: copy the "
+            "solver's Qt/Geant4 DLLs next to rad4space.exe and this Qt "
+            "setting becomes unnecessary.")
         note.setStyleSheet("color: #6c7086; font-size: 11px;")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -101,6 +128,7 @@ class SolverSettingDialog(QDialog):
 
         self._path_edit.textChanged.connect(self._update_info)
         self._qt_edit.textChanged.connect(self._update_info)
+        self._res_edit.textChanged.connect(self._update_info)
         self._update_info()
 
     def _on_browse(self):
@@ -119,6 +147,13 @@ class SolverSettingDialog(QDialog):
             self._qt_edit.text() or os.path.expanduser("~"))
         if path:
             self._qt_edit.setText(path)
+
+    def _on_browse_results(self):
+        path = QFileDialog.getExistingDirectory(
+            self, "Select the results output folder",
+            self._res_edit.text() or os.path.expanduser("~"))
+        if path:
+            self._res_edit.setText(path)
 
     def _update_info(self):
         path = self._path_edit.text().strip()
@@ -145,9 +180,22 @@ class SolverSettingDialog(QDialog):
                 "Empty: falls back to the auto-detected Qt6 bin. Set it when "
                 "the solver links another Qt than this GUI's python.")
 
+        res = self._res_edit.text().strip()
+        if res:
+            if os.path.isdir(res):
+                self._res_info.setText("✓ Folder exists")
+            else:
+                self._res_info.setText(
+                    "Folder does not exist yet (created on first run).")
+        else:
+            self._res_info.setText(
+                f"Empty: falls back to {default_results_root()}")
+
     def _save(self):
         set_solver_path(self._path_edit.text().strip())
         set_qt_bin_dir(self._qt_edit.text())
+        set_results_root(self._res_edit.text())
+        self.settings_saved.emit()
         self.close()
 
     def set_dark_theme(self, dark: bool):

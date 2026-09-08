@@ -16,6 +16,7 @@ APP_ORG = "RadSim"
 APP_NAME = "RadSim"
 KEY_EXECUTABLE = "solver/executable"
 KEY_QT_BIN = "solver/qt_bin_dir"
+KEY_RESULTS_ROOT = "solver/results_root"
 
 # Well-known Qt bin directories on this dev machine, used only as a fallback
 # probe. A real deployment points the setting at the Qt that the solver was
@@ -56,6 +57,12 @@ def get_solver_path() -> str:
     return default_solver_path()
 
 
+def default_results_root() -> str:
+    """Conventional output root for every task run: solver/runs (a sibling of
+    the solver sources). Each task's output lands in <root>/<task>/."""
+    return os.path.join(_repo_root(), "solver", "runs")
+
+
 def set_solver_path(path: str) -> None:
     settings = QSettings(APP_ORG, APP_NAME)
     if path:
@@ -78,6 +85,25 @@ def set_qt_bin_dir(path: str) -> None:
         settings.setValue(KEY_QT_BIN, path.strip())
     else:
         settings.remove(KEY_QT_BIN)
+
+
+def get_results_root() -> str:
+    """Return the directory under which each task's run output folder is
+    created (<root>/<task>/run.mac + csvs). A user override wins; otherwise the
+    conventional repository folder solver/runs is used."""
+    settings = QSettings(APP_ORG, APP_NAME)
+    saved = cast(str, settings.value(KEY_RESULTS_ROOT, ""))
+    return saved.strip() or default_results_root()
+
+
+def set_results_root(path: str) -> None:
+    """Persist the results output root ('' resets it to the default)."""
+    settings = QSettings(APP_ORG, APP_NAME)
+    p = (path or "").strip()
+    if p:
+        settings.setValue(KEY_RESULTS_ROOT, p)
+    else:
+        settings.remove(KEY_RESULTS_ROOT)
 
 
 def runtime_dll_dirs() -> "list[str]":
