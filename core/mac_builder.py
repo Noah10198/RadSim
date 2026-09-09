@@ -353,10 +353,17 @@ def write_workdir(gdml_full_path: str, task, out_root: str):
     absolute path (SetGDMLFile), so it does not need copying.
 
     out_root is created if missing; a per-task subdir avoids collisions when
-    several tasks run concurrently (results land in out_root/<task>/)."""
+    several tasks run concurrently (results land in out_root/<task>/).
+
+    The per-task directory is wiped first: a re-run must never mix the previous
+    run's csv/log files with the new ones (a shorter run would otherwise leave
+    stale dumps behind)."""
     import re
+    import shutil
     safe = re.sub(r"[^A-Za-z0-9_.\-]", "_", task.name) or "task"
     work = os.path.join(out_root, safe)
+    if os.path.isdir(work):
+        shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
     with open(os.path.join(work, "run.mac"), "w", encoding="utf-8") as f:
         f.write(build_mac_text(gdml_full_path, task))

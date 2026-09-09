@@ -22,7 +22,9 @@ from PyQt6.QtCore import Qt, QThread, QObject, QUrl, pyqtSignal
 from PyQt6.QtGui import QPalette, QColor, QFont, QDesktopServices
 
 from core.gdml_agent import GdmlAgent
-from core.project_io import save_project, load_project
+from core.project_io import (
+    RESULTS_DIR, clear_task_output, load_project, project_file, save_project,
+)
 from core.run_manager import RunManager, RunTask
 from core.mac_builder import DEFAULT_EVENTS, active_kinds
 from core.solver_config import get_results_root, get_solver_path
@@ -187,6 +189,9 @@ class MainWindow(QMainWindow):
         self._task_monitor: Optional[TaskMonitorDialog] = None
         self._task_counter = 0
         self._gdml_paths: list[str] = []  # real paths of imported GDML (for project save)
+        # Folder of the currently saved/loaded project (None = never saved yet:
+        # the first Save asks for it, every later Save updates it in place).
+        self._project_dir: Optional[str] = None
         self._analysis_dialogs: dict[tuple, object] = {}  # (task, kind) -> dialog
         self._voxel_viewers: dict[tuple, object] = {}  # (task, qname) -> viewer
         self._traj_viewers: dict[str, object] = {}    # task -> trajectory viewer dialog
@@ -945,14 +950,26 @@ class MainWindow(QMainWindow):
         self._refresh_mac_preview(task_name)
 
     def _save_project(self):
+        """Hard save. The first Save asks for a project FOLDER and stores
+        everything inside it (project.json + geometry/ + results/); later Saves
+        update that same folder without asking again."""
         if not self._gdml_paths:
             QMessageBox.information(
                 self, "Nothing to Save", "Please import a GDML geometry first.")
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project", "", "RadSim Project (*.json)")
-        if not path:
-            return
+        if self._project_dir is None:
+            folder = QFileDialog.getExistingDirectory(
+                self, "Select Project Folder", "")
+            if not folder:
+                return
+            if os.path.isfile(project_file(folder)):
+                answer = QMessageBox.question(
+                    self, "Save Project",
+                    f"This folder already contains a project:\n{folder}\n\n"
+                    "Overwrite it?")
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            self._project_dir = folder
         tasks = []
         for t in self._run_manager._tasks.values():
             tasks.append({
@@ -965,27 +982,48 @@ class MainWindow(QMainWindow):
                 "physics": t.physics or {},
                 "analysis_config": t.analysis_config or {},
             })
-        save_project(path, gdml_paths=self._gdml_paths, tasks=tasks)
+        try:
+            path = save_project(
+                self._project_dir, gdml_paths=self._gdml_paths, tasks=tasks,
+                results_root=get_results_root())
+        except Exception as e:
+            QMessageBox.warning(self, "Save Error", str(e))
+            return
         self._logger.log_system(f"Project saved: {path}")
 
     def _load_project(self):
+        if self._run_manager.is_running_any():
+            QMessageBox.information(
+                self, "Load Project",
+                "A task is still running. Please wait for it to finish (or "
+                "stop it) before loading another project.")
+            return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load Project", "", "RadSim Project (*.json)")
+            self, "Load Project", "", "RadSim Project (project.json)")
         if not path:
             return
         try:
-            gdml_paths, tasks = load_project(path)
+            project_dir, gdml_paths, tasks = load_project(path)
         except Exception as e:
             QMessageBox.warning(self, "Load Error", str(e))
             return
         if not gdml_paths:
             QMessageBox.warning(self, "Load Error", "Project file is missing the geometry path.")
             return
+        # The draft results root is shared by every project: drop the draft
+        # output of each task this project carries, otherwise a same-named task
+        # from the previously open project would show up as this project's.
+        results_root = get_results_root()
+        for td in tasks:
+            clear_task_output(results_root, td.get("name") or "")
+        # close the per-task dialogs of the project we are leaving behind
+        self._close_task_dialogs()
         self._run_manager.clear()
         self._project_tree.clear_tasks()
         self._task_counter = 0
         if not self._replace_gdml(gdml_paths[0]):
             return
+        self._project_dir = project_dir
         for td in tasks:
             t = RunTask(
                 name=td.get("name", f"Run_{self._task_counter + 1:03d}"),
@@ -1015,6 +1053,19 @@ class MainWindow(QMainWindow):
         self._sync_mac_preview_tasks()
         self._logger.log_system(
             f"Project loaded: {path} ({len(tasks)} task(s))")
+
+    def _close_task_dialogs(self):
+        """Close every per-task dialog; they would otherwise keep showing
+        tasks that no longer exist."""
+        for group in (self._analysis_dialogs, self._particle_dialogs,
+                      self._physics_dialogs, self._calculate_dialogs,
+                      self._voxel_viewers, self._traj_viewers):
+            for dlg in list(group.values()):
+                try:
+                    dlg.close()
+                except Exception:
+                    pass
+            group.clear()
 
     # ==================== Multi-task running ====================
 
@@ -1199,6 +1250,13 @@ class MainWindow(QMainWindow):
             k: v for k, v in self._calculate_dialogs.items() if k[1] != name}
         self._sync_run_monitor_tasks()
         self._sync_mac_preview_tasks()
+        # hard-save semantics: the task is gone, so its results go too - both
+        # the copy saved inside the project folder and the draft copy under the
+        # results root (orphan folders would otherwise pile up).
+        if self._project_dir:
+            clear_task_output(
+                os.path.join(self._project_dir, RESULTS_DIR), name)
+        clear_task_output(get_results_root(), name)
         self._logger.log_system(f"Task deleted: {name}")
 
     def _open_analysis_dialog(self, task_name: str, kind: str):
@@ -1904,6 +1962,13 @@ class MainWindow(QMainWindow):
             cand = os.path.join(get_results_root(), task.name)
             if os.path.isdir(cand):
                 return cand
+            # results saved inside the project folder: a loaded project shows
+            # its saved snapshot until the task is re-run (which lands in the
+            # draft root above).
+            if self._project_dir:
+                cand = os.path.join(self._project_dir, RESULTS_DIR, task.name)
+                if os.path.isdir(cand):
+                    return cand
         return None
 
     def _open_run_log(self, task_name: str, path: str) -> None:
