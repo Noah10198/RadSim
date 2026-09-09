@@ -1,3 +1,18 @@
-PyQt6>=6.5.0
-vtk>=9.2.0
-matplotlib>=3.5
+# RadSim runtime dependencies
+#
+# Validated on: Python 3.10.19 / Windows x64 (see environment.yml for the full
+# conda snapshot). Using conda is recommended:
+#
+#     conda env create -f environment.yml
+#     conda activate pyoccenv
+#
+# This file is the pip-only alternative. Note that VTK's PyPI/conda package is
+# named "vtk", while the code imports it as "vtkmodules".
+
+PyQt6==6.4.2
+vtk==9.3.1
+numpy==2.2.6
+
+# Optional: only used by the probe / real-world comparison charts
+# (ui/probe_chart_dialog.py). The dialog shows an install hint if missing.
+matplotlib==3.10.7
