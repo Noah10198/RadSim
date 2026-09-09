@@ -67,7 +67,7 @@ class CalculateSettingDialog(QDialog):
         self._events.setSingleStep(1000)
         self._events.setValue(n_events)
         # 0 -> auto: mac_builder falls back to its DEFAULT_EVENTS
-        self._events.setSpecialValueText(f"auto (default {DEFAULT_EVENTS})")
+        self._events.setSpecialValueText(f"{DEFAULT_EVENTS}")
         grid.addWidget(self._events, 1, 1)
 
         grid.setColumnStretch(0, 1)

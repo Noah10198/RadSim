@@ -97,8 +97,8 @@ class VoxelFieldWidget(VtkWidget):
         self._unit = ""
         # Opacity in % of the *field volume*; 90 means alpha ~0.9 = nearly
         # opaque at the top of the colour ramp (the scale used by the bottom
-        # toolbar slider, default 90%).
-        self._opacity_pct = 90
+        # toolbar slider, default 95%).
+        self._opacity_pct = 95
         # Relative opacity shape (value fraction, alpha fraction). The alpha of
         # every point is scaled by _opacity_pct/100, so 90% keeps low field
         # values transparent while the hot core renders nearly solid.

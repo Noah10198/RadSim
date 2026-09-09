@@ -57,6 +57,14 @@ def _styles(dark: bool) -> str:
             QTreeWidget::item:selected {
                 background-color: #313244; color: #cdd6f4;
             }
+            QHeaderView::section {
+                background-color: #313244; color: #cdd6f4;
+                border: none; border-right: 1px solid #45475a;
+                border-bottom: 1px solid #45475a;
+                padding: 4px 6px; font-size: 12px;
+            }
+            QScrollArea { background-color: #1e1e2e; border: none; }
+            #TaskRowsContainer { background-color: #1e1e2e; }
             QProgressBar {
                 background-color: #1e1e2e; color: #cdd6f4;
                 border: none; border-radius: 4px;
@@ -72,6 +80,9 @@ def _styles(dark: bool) -> str:
             QPushButton:disabled { color: rgba(140,140,140,0.5); }
             QScrollBar:vertical { background-color: #1e1e2e; width: 8px; }
             QScrollBar::handle:vertical { background-color: #45475a; border-radius: 4px; }
+            QScrollBar:horizontal { background-color: #1e1e2e; height: 8px; }
+            QScrollBar::handle:horizontal { background-color: #45475a; border-radius: 4px; }
+            QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; }
         """
     return """
         QDialog { background-color: #f5f5f5; }
@@ -86,6 +97,14 @@ def _styles(dark: bool) -> str:
         QTreeWidget::item:selected {
             background-color: #e4e7eb; color: #2c2c2c;
         }
+        QHeaderView::section {
+            background-color: #e8e8e8; color: #555555;
+            border: none; border-right: 1px solid #d0d0d0;
+            border-bottom: 1px solid #d0d0d0;
+            padding: 4px 6px; font-size: 12px;
+        }
+        QScrollArea { background-color: #f5f5f5; border: none; }
+        #TaskRowsContainer { background-color: #ffffff; }
         QProgressBar {
             background-color: #ffffff; color: #2c2c2c;
             border: 1px solid #d0d0d0; border-radius: 4px;
@@ -101,6 +120,9 @@ def _styles(dark: bool) -> str:
         QPushButton:disabled { color: rgba(140,140,140,0.5); }
         QScrollBar:vertical { background-color: #f0f0f0; width: 8px; }
         QScrollBar::handle:vertical { background-color: #c0c0c0; border-radius: 4px; }
+        QScrollBar:horizontal { background-color: #f0f0f0; height: 8px; }
+        QScrollBar::handle:horizontal { background-color: #c0c0c0; border-radius: 4px; }
+        QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; }
     """
 
 
@@ -365,6 +387,9 @@ class TaskMonitorDialog(QDialog):
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._container = QWidget()
+        # Object name so the stylesheet can paint the scroll area's background
+        # in both themes (the viewport stays white otherwise).
+        self._container.setObjectName("TaskRowsContainer")
         self._rows_layout = QVBoxLayout(self._container)
         self._rows_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._rows_layout.setSpacing(6)

@@ -107,7 +107,19 @@ class MacPreviewDock(QWidget):
                 " font-family: \"Consolas\", \"Courier New\", monospace;"
                 " font-size: 12px; border: 1px solid #313244;"
                 " border-radius: 4px; padding: 4px;"
-                " selection-background-color: #45475a; }")
+                " selection-background-color: #45475a; }"
+                "QScrollBar:vertical { background: #11111b; width: 10px;"
+                " margin: 0px; }"
+                "QScrollBar::handle:vertical { background: #313244;"
+                " min-height: 20px; border-radius: 4px; }"
+                "QScrollBar::handle:vertical:hover { background: #45475a; }"
+                "QScrollBar:horizontal { background: #11111b; height: 10px;"
+                " margin: 0px; }"
+                "QScrollBar::handle:horizontal { background: #313244;"
+                " min-width: 20px; border-radius: 4px; }"
+                "QScrollBar::handle:horizontal:hover { background: #45475a; }"
+                "QScrollBar::add-line, QScrollBar::sub-line"
+                " { width: 0px; height: 0px; }")
         else:
             self.setStyleSheet(
                 "QLabel { color: #555555; font-size: 12px; }"
@@ -120,4 +132,14 @@ class MacPreviewDock(QWidget):
                 " font-family: \"Consolas\", \"Courier New\", monospace;"
                 " font-size: 12px; border: 1px solid #d0d0d0;"
                 " border-radius: 4px; padding: 4px;"
-                " selection-background-color: #cde5ff; }")
+                " selection-background-color: #cde5ff; }"
+                "QScrollBar:vertical { background: #fafafa; width: 10px;"
+                " margin: 0px; }"
+                "QScrollBar::handle:vertical { background: #c0c0c0;"
+                " min-height: 20px; border-radius: 4px; }"
+                "QScrollBar:horizontal { background: #fafafa; height: 10px;"
+                " margin: 0px; }"
+                "QScrollBar::handle:horizontal { background: #c0c0c0;"
+                " min-width: 20px; border-radius: 4px; }"
+                "QScrollBar::add-line, QScrollBar::sub-line"
+                " { width: 0px; height: 0px; }")
