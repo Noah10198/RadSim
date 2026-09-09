@@ -60,6 +60,10 @@ _HIST_XUNIT = {
 # the rad4space example macro, giving a small but non-trivial result per run.
 DEFAULT_EVENTS = 10000
 
+# Upper bound for the "Number of events" spin box: 20e8 = 2e9. Kept below the
+# 32-bit signed limit (2_147_483_647) because QSpinBox stores an int.
+MAX_EVENTS = 2_000_000_000
+
 # "active" means the config carries at least one configured quantity.
 def _kind_is_active(analysis_config, key) -> bool:
     cfg = analysis_config.get(key) or {}

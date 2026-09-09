@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
-from core.mac_builder import DEFAULT_EVENTS
+from core.mac_builder import DEFAULT_EVENTS, MAX_EVENTS
 
 
 class CalculateSettingDialog(QDialog):
@@ -63,7 +63,7 @@ class CalculateSettingDialog(QDialog):
 
         grid.addWidget(QLabel("Number of events (/run/beamOn):"), 1, 0)
         self._events = QSpinBox()
-        self._events.setRange(0, 100_000_000)
+        self._events.setRange(0, MAX_EVENTS)
         self._events.setSingleStep(1000)
         self._events.setValue(n_events)
         # 0 -> auto: mac_builder falls back to its DEFAULT_EVENTS
