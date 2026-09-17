@@ -32,9 +32,8 @@ from vtkmodules.vtkCommonDataModel import vtkImageData, vtkPiecewiseFunction
 from vtkmodules.vtkCommonCore import vtkDoubleArray
 from vtkmodules.vtkRenderingVolume import vtkFixedPointVolumeRayCastMapper
 from vtkmodules.vtkRenderingAnnotation import (
-    vtkScalarBarActor, vtkAxesActor,
+    vtkScalarBarActor,
 )
-from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 import vtkmodules.vtkRenderingFreeType  # noqa: F401  (axis captions)
 
 try:
@@ -104,8 +103,6 @@ class VoxelFieldWidget(VtkWidget):
         # values transparent while the hot core renders nearly solid.
         self._opacity_profile = ((0.00, 0.00), (0.02, 0.06), (0.12, 0.28),
                                  (0.40, 0.62), (1.00, 1.00))
-        self._axes_marker = None
-        self._axes_marker_ready = False
         super().__init__(parent)
 
     # ── UI: toolbar subset (Slice / Ortho / Fit / X/Y/Z) ───────────────────
@@ -448,70 +445,10 @@ class VoxelFieldWidget(VtkWidget):
         bar.DrawFrameOff()
         bar.DrawBackgroundOff()
 
-    # ── corner (orientation) axis marker, bottom-right ────────────────────
-    # Size and position match the trajectory viewer's corner axes exactly:
-    # viewport (0.76, 0.01, 1.0, 0.27) pinned to the lower-right corner with
-    # 24 pt X / Y / Z captions, so both result windows read identically.
-    def showEvent(self, event):
-        super().showEvent(event)
-        self._enable_axes_marker()
-
-    def _enable_axes_marker(self):
-        if getattr(self, "_axes_marker_ready", False):
-            return
-        self._axes_marker_ready = True
-        try:
-            ax = vtkAxesActor()
-            ax.SetTotalLength(1.0, 1.0, 1.0)
-            ax.SetAxisLabels(1)
-            omw = vtkOrientationMarkerWidget()
-            omw.SetOrientationMarker(ax)
-            omw.SetInteractor(self.renderWindow().GetInteractor())
-            # Lower-right corner - the same viewport the trajectory viewer
-            # uses for its corner axes, so the two windows stay consistent.
-            omw.SetViewport(0.76, 0.01, 1.0, 0.27)
-            omw.SetEnabled(1)
-            omw.InteractiveOff()
-            self._axes_marker = omw
-            self._update_axes_marker()
-            self.render()
-        except Exception:
-            self._axes_marker_ready = False
-
-    def _update_axes_marker(self):
-        """Caption letters X / Y / Z are painted in the inverse of the scene
-        background (white on the dark scene, near-black on the light one), at
-        the same 24 pt size as the trajectory viewer's corner axes."""
-        omw = getattr(self, "_axes_marker", None)
-        if omw is None:
-            return
-        try:
-            ax = omw.GetOrientationMarker()
-            lab = (1.0, 1.0, 1.0) if self._is_dark else (0.08, 0.08, 0.12)
-            for cap in (ax.GetXAxisCaptionActor2D(),
-                        ax.GetYAxisCaptionActor2D(),
-                        ax.GetZAxisCaptionActor2D()):
-                tp = cap.GetCaptionTextProperty()
-                tp.SetColor(*lab)
-                tp.SetShadow(0)
-                tp.ItalicOff()
-                tp.SetFontSize(24)
-        except Exception:
-            pass
-
-    def _disable_axes_marker(self):
-        omw = getattr(self, "_axes_marker", None)
-        if omw is not None:
-            try:
-                omw.EnabledOff()
-            except Exception:
-                pass
-
     def set_dark_theme(self, is_dark: bool):
         self._is_dark = is_dark
         super().set_dark_theme(is_dark)
         self._style_sliders()
-        self._update_axes_marker()
         self._style_colorbar()
         self.render()
 
@@ -684,11 +621,6 @@ class VoxelResultViewer(QDialog):
             self._view.set_geometry_ghost(True, wireframe=True)
 
     def closeEvent(self, event):
-        # Release the orientation marker before the GL context is destroyed
-        try:
-            self._view._disable_axes_marker()
-        except Exception:
-            pass
         # Release the VTK GL context while the widget is still alive. If this
         # dialog outlives the main window (user closes the main window first)
         # and no cleanup runs, the legacy QVTKRenderWindowInteractor keeps a

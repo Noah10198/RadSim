@@ -33,9 +33,8 @@ from vtkmodules.vtkCommonCore import vtkIntArray, vtkLookupTable, vtkPoints
 from vtkmodules.vtkCommonDataModel import vtkCellArray, vtkPolyData, vtkPolyLine
 from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper
 from vtkmodules.vtkRenderingAnnotation import (
-    vtkScalarBarActor, vtkAxesActor,
+    vtkScalarBarActor,
 )
-from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 import vtkmodules.vtkRenderingFreeType  # noqa: F401  (corner-axis captions)
 
 from core.gdml_tree import GdmlNodeType
@@ -220,10 +219,7 @@ class TrajectoryViewWidget(VtkWidget):
         self._track_pnames = None   # particle names of the current LUT
         self._track_lut = None
         self._world_actors = []     # world-container actors to re-tint
-        self._corner_axes = None
-        self._corner_axes_actor = None
-        self._corner_pending = None   # QTimer scheduled to build the marker
-        self._released = False        # VTK context already handed back
+        self._cleaned_up = False      # VTK context already handed back
         super().__init__(parent)
 
     # -- geometry backdrop (Particle Source 3D preview style) -----------------
@@ -264,80 +260,15 @@ class TrajectoryViewWidget(VtkWidget):
         self._tint_world()
         self.render()
 
-    def _build_corner_axes(self):
-        """Screen-fixed RGB XYZ axis marker in the lower-right corner.
-
-        The marker (vtkOrientationMarkerWidget) needs the interactor running,
-        so it is built on the first showEvent instead of in the constructor.
-        """
-        self._corner_pending = None
-        # Never enable the widget against a dead / not-yet-mapped GL context:
-        # doing so makes VTK call wglMakeCurrent on an invalid HDC and it keeps
-        # logging "vtkWin32OpenGLRenderWindow: wglMakeCurrent failed".
-        if self._released or not self.isVisible():
-            return
-        if self._corner_axes is not None:
-            return
-        try:
-            ax = vtkAxesActor()
-            ax.SetTotalLength(1.0, 1.0, 1.0)
-            ax.SetAxisLabels(1)
-            lab = (1.0, 1.0, 1.0) if self._is_dark else (0.08, 0.08, 0.12)
-            for cap in (ax.GetXAxisCaptionActor2D(),
-                        ax.GetYAxisCaptionActor2D(),
-                        ax.GetZAxisCaptionActor2D()):
-                tp = cap.GetCaptionTextProperty()
-                tp.SetColor(*lab)
-                tp.SetShadow(0)
-                tp.SetFontSize(24)
-            omw = vtkOrientationMarkerWidget()
-            omw.SetOrientationMarker(ax)
-            omw.SetInteractor(self._vtk_interactor.GetRenderWindow()
-                              .GetInteractor())
-            omw.SetViewport(0.76, 0.01, 1.0, 0.27)
-            omw.SetEnabled(1)
-            omw.InteractiveOff()
-            self._corner_axes = omw
-            self._corner_axes_actor = ax
-            self.render()
-        except Exception:
-            self._corner_axes = None
-            self._corner_axes_actor = None
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        if not self._corner_axes and not self._released:
-            try:
-                # Keep the QTimer so cleanup() can cancel it: firing after the
-                # GL context was released would re-create the marker on a dead
-                # HDC (wglMakeCurrent failed).
-                self._corner_pending = QTimer.singleShot(
-                    0, self._build_corner_axes)
-            except Exception:
-                self._corner_pending = None
-
     def cleanup(self):
-        """Cancel pending work, disable the corner marker, release VTK.
+        """Release the VTK GL context.
 
         Idempotent: closing the dialog (closeEvent -> cleanup) or the main
         window tearing every secondary window down may both reach here.
         """
-        if self._released:
+        if self._cleaned_up:
             return
-        self._released = True
-        if self._corner_pending is not None:
-            try:
-                self._corner_pending.stop()
-            except Exception:
-                pass
-            self._corner_pending = None
-        if self._corner_axes is not None:
-            try:
-                self._corner_axes.EnabledOff()
-            except Exception:
-                pass
-            self._corner_axes = None
-            self._corner_axes_actor = None
+        self._cleaned_up = True
         try:
             super().cleanup()
         except Exception:
@@ -345,7 +276,7 @@ class TrajectoryViewWidget(VtkWidget):
 
     def render(self):
         """Never touch the GL context after it was released."""
-        if self._released:
+        if self._cleaned_up:
             return
         super().render()
 
@@ -522,20 +453,14 @@ class TrajectoryViewWidget(VtkWidget):
         bar.DrawBackgroundOff()
 
     def set_dark_theme(self, is_dark):
-        if self._released:
+        if self._cleaned_up:
             return
         self._is_dark = is_dark
+        # The base class recolours the corner captions for us.
         super().set_dark_theme(is_dark)
         self._style_bar()
         self._tint_world()
         self._apply_track_theme()
-        ax = self._corner_axes_actor
-        if ax is not None:
-            lab = (1.0, 1.0, 1.0) if is_dark else (0.08, 0.08, 0.12)
-            for cap in (ax.GetXAxisCaptionActor2D(),
-                        ax.GetYAxisCaptionActor2D(),
-                        ax.GetZAxisCaptionActor2D()):
-                cap.GetCaptionTextProperty().SetColor(*lab)
         self.render()
 
 

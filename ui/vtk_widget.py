@@ -25,8 +25,11 @@ from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vtkmodules.vtkRenderingCore import (
     vtkRenderer, vtkActor, vtkPolyDataMapper,
 )
-from vtkmodules.vtkRenderingAnnotation import vtkCubeAxesActor, vtkCornerAnnotation
+from vtkmodules.vtkRenderingAnnotation import (
+    vtkCubeAxesActor, vtkCornerAnnotation, vtkAxesActor,
+)
 from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+from vtkmodules.vtkInteractionWidgets import vtkOrientationMarkerWidget
 from vtkmodules.vtkCommonDataModel import vtkPlane, vtkPlaneCollection
 
 # Import VTK backends (needed on Windows). vtkRenderingVolumeOpenGL2 registers
@@ -36,6 +39,7 @@ from vtkmodules.vtkCommonDataModel import vtkPlane, vtkPlaneCollection
 import vtkmodules.vtkRenderingOpenGL2
 import vtkmodules.vtkRenderingVolumeOpenGL2
 import vtkmodules.vtkInteractionStyle
+import vtkmodules.vtkRenderingFreeType  # noqa: F401  (corner-axis captions)
 
 from vtk_engine.vtk_scene import VtkScene
 from core.gdml_tree import GdmlNode
@@ -75,6 +79,15 @@ class VtkWidget(QWidget):
 
     node_picked = pyqtSignal(str)   # Node picked, emits entry_id
 
+    # ── Corner orientation marker (RGB axis trihedron, lower-right) ──
+    # Viewport + caption size are the ones already used by the trajectory
+    # viewer / voxel result viewer / gun-direction preview, so every 3D window
+    # in RadSim shows the same marker.  Subclasses that build their own marker
+    # (or that must stay minimal) opt out via ENABLE_CORNER_AXES = False.
+    ENABLE_CORNER_AXES: bool = True
+    CORNER_AXES_VIEWPORT: Tuple[float, float, float, float] = (0.76, 0.01, 1.0, 0.27)
+    CORNER_AXES_FONT_SIZE: int = 24
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -90,7 +103,6 @@ class VtkWidget(QWidget):
         self._clip_bounds: Optional[List[float]] = None
         self._original_colors: Dict[int, Tuple[float, float, float]] = {}
         self._gdml_actors: List[vtkActor] = []
-        self._is_dark = True
 
         # ── Build UI ──
         self._build_ui()
@@ -116,6 +128,9 @@ class VtkWidget(QWidget):
 
         # ── Default actors ──
         self._cube_axes: Optional[vtkCubeAxesActor] = None
+
+        # ── Corner orientation marker (lower-right axis trihedron) ──
+        self._corner_axes: Optional[vtkOrientationMarkerWidget] = None
 
         self._vtk_interactor.Initialize()
 
@@ -198,6 +213,7 @@ class VtkWidget(QWidget):
         self._scene_built = False
 
         self._setup_default_scene()
+        self._init_corner_axes()
         self._scene.renderer.ResetCamera()
         self.render()
         # Disable vertical sync. The default vsync locks on-screen rendering
@@ -258,6 +274,64 @@ class VtkWidget(QWidget):
             # New WId -> VTK rebuilds the GL context and vsync resets, so it
             # has to be disabled again
             self._set_swap_control(0)
+        except Exception:
+            pass
+
+    # ── Corner orientation marker (lower-right axis trihedron) ──
+
+    def _init_corner_axes(self):
+        """Screen-fixed RGB X/Y/Z trihedron in the lower-right corner.
+
+        Same recipe (and same viewport / 24 pt captions) as the trajectory
+        viewer, the voxel result viewer and the gun-direction preview, so all
+        RadSim 3D windows read identically.  It lives in its own
+        renderer/viewport, so it is unaffected by zooming/panning/Fit and it
+        stays out of the scene's actor bookkeeping (no effect on picking,
+        CubeAxes bounds, clipping or export).
+        """
+        if not self.ENABLE_CORNER_AXES or self._corner_axes is not None:
+            return
+        try:
+            ax = vtkAxesActor()
+            ax.SetTotalLength(1.0, 1.0, 1.0)
+            ax.SetAxisLabels(1)
+
+            omw = vtkOrientationMarkerWidget()
+            omw.SetOrientationMarker(ax)
+            omw.SetInteractor(self._vtk_interactor.GetRenderWindow()
+                              .GetInteractor())
+            omw.SetViewport(*self.CORNER_AXES_VIEWPORT)
+            # Order matters: "Enabled" must come before touching the
+            # interactivity flag, otherwise VTK prints
+            #   "Set interactor and Enabled before changing interaction."
+            omw.SetEnabled(1)
+            # View-only marker: it must not swallow the mouse in its corner.
+            omw.InteractiveOff()
+            self._corner_axes = omw
+            self._style_corner_axes(True)
+        except Exception as e:
+            # A missing widget class / GL context must not break the window
+            self._corner_axes = None
+            print(f"[VtkWidget] corner axes unavailable: {e}", flush=True)
+
+    def _style_corner_axes(self, is_dark: bool):
+        """Paint the X / Y / Z captions in the inverse of the scene background
+        (white on the dark scene, near-black on the light one) so the letters
+        stay readable in either theme."""
+        omw = self._corner_axes
+        if omw is None:
+            return
+        try:
+            ax = omw.GetOrientationMarker()
+            lab = (1.0, 1.0, 1.0) if is_dark else (0.08, 0.08, 0.12)
+            for cap in (ax.GetXAxisCaptionActor2D(),
+                        ax.GetYAxisCaptionActor2D(),
+                        ax.GetZAxisCaptionActor2D()):
+                tp = cap.GetCaptionTextProperty()
+                tp.SetColor(*lab)
+                tp.SetShadow(0)
+                tp.ItalicOff()
+                tp.SetFontSize(self.CORNER_AXES_FONT_SIZE)
         except Exception:
             pass
 
@@ -375,7 +449,6 @@ class VtkWidget(QWidget):
 
     def _apply_toolbar_style(self, dark: bool):
         """Toolbar styling — buttons, combo and the themed sliders."""
-        self._is_dark = dark
         if dark:
             bg       = "#2a2a3a"
             fg       = "#e0e0e0"
@@ -639,10 +712,16 @@ class VtkWidget(QWidget):
         else:
             self._scene.set_background_color(0.95, 0.95, 0.95)
         self._apply_toolbar_style(is_dark)
+        self._style_corner_axes(is_dark)
         self.render()
 
     def cleanup(self) -> None:
         """Clean up VTK resources."""
+        if self._corner_axes is not None:
+            try:
+                self._corner_axes.EnabledOff()
+            except Exception:
+                pass
         try:
             self._vtk_interactor.TerminateApp()
         except Exception:
@@ -861,6 +940,10 @@ class VtkWidget(QWidget):
 
 class VtkPreviewWidget(VtkWidget):
     """Minimal VTK preview widget — no toolbar, no clip, just the scene + CubeAxes."""
+
+    # Dialogs keep their current look: the gun-direction preview builds its own
+    # marker on top of this widget, a second one would double up.
+    ENABLE_CORNER_AXES: bool = False
 
     def _build_ui(self):
         """Build minimal layout: VTK viewport only (no toolbar)."""
