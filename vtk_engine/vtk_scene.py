@@ -225,6 +225,12 @@ class VtkScene:
         intersect = vtkIntersectionPolyDataFilter()
         intersect.SetInputData(0, poly_a)
         intersect.SetInputData(1, poly_b)
+        # Only the intersection lines (output port 0) are needed.  The default
+        # split outputs walk the line graph in Impl::GetSingleLoop(), whose
+        # `while (nextPt != startPt)` can spin forever — see interference_panel.
+        intersect.SetSplitFirstOutput(False)
+        intersect.SetSplitSecondOutput(False)
+        intersect.SetCheckMesh(False)
         intersect.Update()
         result = intersect.GetOutput()
         if result.GetNumberOfPoints() == 0:
