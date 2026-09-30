@@ -349,7 +349,7 @@ class MainWindow(QMainWindow):
 
     def _init_project_tree(self):
         self._project_tree = ProjectTreeWidget()
-        self._tree_dock = QDockWidget("Project", self)
+        self._tree_dock = QDockWidget("Project Tree", self)
         self._tree_dock.setWidget(self._project_tree)
         self._tree_dock.setMinimumWidth(280)
         self._tree_dock.setFeatures(

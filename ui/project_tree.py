@@ -2,7 +2,7 @@
 ProjectTreeWidget - the RadSim project tree
 
 Structure (matches GUI_Design.md section 2 and the tree conventions):
-  Project
+  Project of RadSim
   ├── Geometry              # imported GDML (with the volume hierarchy; the
                             # checkbox toggles visibility)
   └── Tasks                 # multiple tasks allowed; each task has:
@@ -80,7 +80,9 @@ class ProjectTreeWidget(QWidget):
         layout.addWidget(self._tree)
 
         # -- Root --
-        self._project_root = QTreeWidgetItem(self._tree, ["Project"])
+        # The dock above is already titled "Project Tree", so this row names
+        # the project instead of repeating that label.
+        self._project_root = QTreeWidgetItem(self._tree, ["Project of RadSim"])
         font = self._project_root.font(0)
         font.setBold(True)
         self._project_root.setFont(0, font)
