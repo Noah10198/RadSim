@@ -1,106 +1,106 @@
 # RadSim
 
-RadSim 是辐射求解器 [rad4space](solver/rad4space/README.md) 的图形前端（GUI）：
-在 3D 视图中浏览 GDML 几何、可视化配置粒子源与物理过程、批量运行蒙特卡罗仿真，
-并直接查看体素剂量、探针通量、能谱和粒子轨迹等结果。
+RadSim is a graphical front-end for the radiation solver
+[rad4space](solver/rad4space/README.en.md). It lets you inspect GDML geometry in 3D,
+configure particle sources and physics interactively, run Monte Carlo simulations in
+batch, and view voxel dose, probe flux, spectra and particle trajectories.
 
-- 语言：Python 3.10
-- 界面：PyQt6 + VTK
-- 求解器：基于 Geant4 11.4.2 的 batch 可执行程序 `rad4space.exe`
-- 平台：Windows x64（当前仅在 Windows 上验证）
+- Language: Python 3.10
+- UI: PyQt6 + VTK
+- Solver: `rad4space.exe`, a Geant4 11.4.2 batch executable
+- Platform: Windows x64 (only Windows has been validated so far)
 
-> **版本 0.1.0** ｜ 最后更新 2026-09-09 ｜ 模块级开发文档见 [`doc/`](doc/README.md)
+> **Version 0.1.0** ｜ Last updated 2026-09-09 ｜ Module-level developer docs: [`doc/`](doc/README.md)
 
-## 功能特性
+## Features
 
-| 模块 | 说明 |
+| Module | Description |
 |---|---|
-| GDML 几何 | 导入 GDML，树形浏览层级结构，3D 渲染并支持拾取、显隐、位移编辑 |
-| 任务管理 | 一个项目可包含多个任务，每个任务独立配置几何、源、物理和分析 |
-| 粒子源 | GPS 通用源：单能 / 能谱 / 离子，位置与方向可视化预览 |
-| 物理过程 | 可切换物理列表（FTFP_BERT / Shielding 等），设置生产阈值与最大步长 |
-| 分析模式 | real world（逻辑体积）、probe（探针）、voxel（直角网格）三种计分方式 |
-| 运行调度 | 多任务队列，并发上限 2，实时进度与日志，可随时停止 |
-| 结果查看 | 3D 体素云图、探针对比曲线、能谱直方图、粒子轨迹、运行日志、通用文件查看 |
-| 项目持久化 | 项目 = 一个文件夹（`project.json` + `geometry/` + `results/`），可整体迁移 |
-| 实时预览 | 右侧面板按当前配置实时生成 `run.mac` 预览 |
+| GDML geometry | Import GDML, browse the hierarchy as a tree, render in 3D with picking, visibility and placement editing |
+| Task management | A project holds multiple tasks, each with its own geometry, source, physics and analysis |
+| Particle source | GPS source: mono-energetic / spectrum / ion, with visual position and direction preview |
+| Physics | Switchable physics list (FTFP_BERT / Shielding, ...), production cut and max step |
+| Analysis modes | real world (logical volumes), probe (probe cubes), voxel (Cartesian mesh) scoring |
+| Run scheduling | Task queue with a concurrency limit of 2, live progress and logs, stop at any time |
+| Result viewers | 3D voxel rendering, probe comparison charts, spectra, trajectories, run log, generic file viewer |
+| Project persistence | A project is a folder (`project.json` + `geometry/` + `results/`) and can be moved as a whole |
+| Live preview | The right panel renders the `run.mac` generated from the current configuration |
 
-## 界面概览
+## UI Layout
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │ 📁 Import GDML │ 🧾 Load Project │ 💾 Save Project ┃ 🎯 Reset View ┃  │
 │ ▶️ Run │ 🟢 Idle │ ⏹ Stop ┃ ⚙️ Solver Setting │ ☀️ Theme │ ❓ Help  │
 ├──────────────┬───────────────────────────────────┬───────────────────┤
-│  Project 树  │          3D 视图 (VTK)            │  run.mac 预览     │
+│ Project tree │          3D view (VTK)            │  run.mac preview  │
 │              ├───────────────────────────────────┤                   │
-│              │          系统日志                 │                   │
+│              │          System log               │                   │
 ├──────────────┴───────────────────────────────────┴───────────────────┤
-│ 状态栏                                                                │
+│ Status bar                                                            │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-工具栏按钮：
-
-| 按钮 | 功能 |
+| Toolbar button | Action |
 |---|---|
-| 📁 Import GDML | 导入 GDML 几何（一个项目仅支持一个几何文件） |
-| 🧾 Load Project | 打开已保存的项目（选择 `project.json`） |
-| 💾 Save Project | 保存项目；首次保存时选择项目文件夹 |
-| 🎯 Reset View | 3D 相机复位 |
-| ▶️ Run | 打开运行启动器，勾选任务并启动 |
-| 🟢 Idle / 🔄 Running / ⚠️ Issues / ✅ Done | 任务监控窗口，显示每个任务的进度与状态 |
-| ⏹ Stop | 停止所有正在运行的任务 |
-| ⚙️ Solver Setting | 配置求解器可执行文件与 Qt 运行时目录 |
-| 🌙 / ☀️ Theme | 深色 / 浅色主题切换 |
-| ❓ Help | 帮助 |
+| 📁 Import GDML | Import a GDML geometry (one geometry per project) |
+| 🧾 Load Project | Open a saved project (`project.json`) |
+| 💾 Save Project | Save the project; the folder is chosen on the first save |
+| 🎯 Reset View | Reset the 3D camera |
+| ▶️ Run | Open the run launcher and start the checked tasks |
+| 🟢 Idle / 🔄 Running / ⚠️ Issues / ✅ Done | Task monitor with per-task progress and status |
+| ⏹ Stop | Stop every running task |
+| ⚙️ Solver Setting | Configure the solver executable and Qt runtime directory |
+| 🌙 / ☀️ Theme | Toggle dark / light theme |
+| ❓ Help | Help |
 
-## 目录结构
+## Repository Layout
 
 ```
 RadSim/
-├── main.py                     程序入口（QApplication + 主窗口）
+├── main.py                     Entry point (QApplication + main window)
 ├── app/
-│   └── main_window.py          主窗口：布局、信号连接、任务编排、项目存取
-├── core/                       与界面解耦的核心逻辑
-│   ├── gdml_parser.py          GDML 解析（define/materials/solids/structure/setup）
-│   ├── gdml_tree.py            GDML 数据节点树（GdmlNode / Placement）
-│   ├── gdml_evaluator.py       GDML 属性表达式求值
-│   ├── gdml_writer.py          GDML 写回（多文件合并、位移覆盖、本地材料注入）
-│   ├── gdml_agent.py           GDML 数据代理（单例，统一入口）
-│   ├── materials_lib.py        材料库（NIST + 自定义元素 / 化合物 / 混合物）
-│   ├── mac_builder.py          生成 run.mac 与任务工作目录
-│   ├── collision_detector.py   实体 AABB 碰撞检测
-│   ├── run_manager.py          多任务运行调度（QProcess）
-│   ├── project_io.py           项目保存 / 加载（文件夹式）
-│   ├── project_model.py        RunTask / CalculateSetting 数据模型
-│   └── solver_config.py        求解器路径与结果目录（QSettings）
-├── vtk_engine/                 VTK 场景管理与实体工厂
-│   ├── vtk_scene.py            渲染窗口、actor 树、拾取 / 高亮
-│   └── vtk_solid_factory.py    按 GDML 实体类型构建 polydata / actor
-├── ui/                         PyQt 界面组件
-│   ├── ribbon_toolbar.py       Ribbon 工具栏
-│   ├── project_tree.py         项目树（几何 + 任务 + 结果）
-│   ├── vtk_widget.py           3D 视图控件
-│   ├── mac_preview.py          右侧 run.mac 预览面板
-│   ├── trajectory_viewer.py    粒子轨迹查看器
-│   ├── voxel_result_viewer.py  体素结果 3D 查看器
-│   ├── probe_result_viewer.py  计分结果读取与分组（无 Qt 依赖）
-│   ├── probe_chart_dialog.py   探针 / real world 对比图（matplotlib）
-│   └── dialogs/                各配置与结果对话框
-├── utils/logger.py             异步日志单例
-├── data/                       element.xml（元素表）、nist.txt（NIST 材料表）
-├── solver/                     rad4space 源码、构建产物与运行输出
-│   ├── rad4space/              求解器（C++，Geant4）
-│   └── runs/                   默认的任务输出根目录
-└── test/                       测试用 GDML 与样例数据
+│   └── main_window.py          Layout, signal wiring, task orchestration, project I/O
+├── core/                       UI-independent core logic
+│   ├── gdml_parser.py          GDML parser (define/materials/solids/structure/setup)
+│   ├── gdml_tree.py            GDML node tree (GdmlNode / Placement)
+│   ├── gdml_evaluator.py       GDML attribute expression evaluator
+│   ├── gdml_writer.py          GDML writer (multi-file merge, placement override)
+│   ├── gdml_agent.py           GDML data agent (singleton facade)
+│   ├── materials_lib.py        Material library (NIST + custom elements/compounds/mixtures)
+│   ├── mac_builder.py          run.mac generation and per-task work directory
+│   ├── collision_detector.py   AABB collision detection
+│   ├── run_manager.py          Multi-task run scheduler (QProcess)
+│   ├── project_io.py           Folder-based project save / load
+│   ├── project_model.py        RunTask / CalculateSetting data model
+│   └── solver_config.py        Solver path and results root (QSettings)
+├── vtk_engine/                 VTK scene management and solid factory
+│   ├── vtk_scene.py            Render window, actor tree, picking / highlight
+│   └── vtk_solid_factory.py    Build polydata / actors per GDML solid type
+├── ui/                         PyQt widgets
+│   ├── ribbon_toolbar.py       Ribbon toolbar
+│   ├── project_tree.py         Project tree (geometry + tasks + results)
+│   ├── vtk_widget.py           3D view widget
+│   ├── mac_preview.py          run.mac preview dock
+│   ├── trajectory_viewer.py    Particle trajectory viewer
+│   ├── voxel_result_viewer.py  Voxel result 3D viewer
+│   ├── probe_result_viewer.py  Scoring result reader / grouper (no Qt)
+│   ├── probe_chart_dialog.py   Probe / real world comparison charts (matplotlib)
+│   └── dialogs/                Configuration and result dialogs
+├── utils/logger.py             Async logger singleton
+├── data/                       element.xml, nist.txt
+├── solver/                     rad4space sources, build output and run output
+│   ├── rad4space/              The C++ / Geant4 solver
+│   └── runs/                   Default results root
+└── test/                       Test GDML files and sample data
 ```
 
-## 安装
+## Installation
 
-### 方式一：conda（推荐）
+### Option 1: conda (recommended)
 
-项目在 Python 3.10 的 conda 环境中开发，`environment.yml` 是从该环境完整导出的快照：
+The project is developed in a Python 3.10 conda environment; `environment.yml` is a
+full export of that environment:
 
 ```bash
 conda env create -f environment.yml
@@ -108,25 +108,27 @@ conda activate pyoccenv
 python main.py
 ```
 
-### 方式二：pip
+### Option 2: pip
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-> 代码中导入 VTK 使用 `vtkmodules`，对应的 PyPI 包名是 `vtk`。
-> `matplotlib` 仅在探针 / real world 对比图对话框中使用，缺失时该对话框会提示安装。
+> The code imports VTK as `vtkmodules`; the PyPI package name is `vtk`.
+> `matplotlib` is only used by the probe / real-world comparison dialog and shows an
+> install hint when missing.
 
-### 求解器 rad4space
+### Solver
 
-GUI 只是前端，真正的仿真由 `solver/rad4space/` 下的 Geant4 程序完成。
-仓库中已包含构建好的 `solver/rad4space/build/Release/rad4space.exe`；
-如需自行编译，参见 [solver/rad4space/README.md](solver/rad4space/README.md)
-（依赖 Geant4 11.4.2、xerces-c、Qt 6.11）。
+The GUI is only a front-end: the actual simulation is run by the Geant4 program under
+`solver/rad4space/`. A prebuilt `solver/rad4space/build/Release/rad4space.exe` is
+included; see [solver/rad4space/README.en.md](solver/rad4space/README.en.md) for
+build instructions (Geant4 11.4.2, xerces-c, Qt 6.11).
 
-求解器可执行文件路径与 Qt 运行时目录可在 **⚙️ Solver Setting** 中配置，
-并通过 `QSettings` 持久化；留空时按以下顺序自动探测：
+The solver executable and its Qt runtime directory can be set in
+**⚙️ Solver Setting** and are persisted through `QSettings`. When left empty the
+following candidates are probed in order:
 
 ```
 solver/rad4space/build/Release/rad4space.exe
@@ -134,150 +136,149 @@ solver/rad4space/build/rad4space.exe
 solver/rad4space/rad4space.exe
 ```
 
-> 注意：从 conda 环境启动求解器时，若其自带的旧版 Qt6 DLL 抢先加载，
-> 求解器会以 `0xC0000135` / `0xC0000139` 退出。RadSim 会在启动求解器前
-> 把配置的 Qt bin 目录前置到 `PATH`，因此在 Solver Setting 中填对 Qt 路径即可。
+> When launched from a conda environment, the solver may exit with `0xC0000135` /
+> `0xC0000139` if conda's older Qt6 DLLs are picked up first. RadSim prepends the
+> configured Qt bin directory to `PATH` before launching, so set it in Solver Setting.
 
-## 使用说明
+## Usage
 
-### 1. 导入几何
+### 1. Import geometry
 
-点击 **📁 Import GDML**。几何文件小于 500 KB 时同步解析，否则在后台线程解析
-（界面保持响应）。导入后：
+Click **📁 Import GDML**. Files smaller than 500 KB are parsed synchronously, larger
+ones in a background thread so the UI stays responsive. Afterwards:
 
-- 左侧 Project 树出现 Geometry 子树，勾选框控制可见性；
-- 中央 3D 视图渲染几何，单击可选中并反选树节点；
-- 系统会自动创建一个默认任务 `Run_001`。
+- a Geometry subtree appears in the project tree (checkboxes toggle visibility);
+- the 3D view renders the geometry and clicking picks / selects tree nodes;
+- a default task `Run_001` is created automatically.
 
-> 一个项目只支持一个 GDML。再次导入会询问是否替换当前几何与任务。
+> One geometry per project. Importing another asks whether to replace the current one.
 
-### 2. 配置任务
+### 2. Configure tasks
 
-在 Project 树中双击任务下的节点进行配置：
+Double-click the nodes under a task:
 
-| 节点 | 配置内容 |
+| Node | Configuration |
 |---|---|
-| Calculate Setting | 线程数、事件数 |
-| Particle Setting | 粒子类型、能量 / 能谱、位置、方向分布 |
-| Physics Process | 物理列表、生产阈值、最大步长 |
-| Analysis → real world / probe / voxel | 计分对象与计分数量 |
+| Calculate Setting | Thread count, number of events |
+| Particle Setting | Particle type, energy / spectrum, position, direction |
+| Physics Process | Physics list, production cut, max step |
+| Analysis → real world / probe / voxel | Scored entities and quantities |
 
-右侧 **run.mac 预览** 面板会实时显示当前配置生成的宏文件内容。
+The **run.mac preview** panel updates live as you edit.
 
-三种分析模式：
+Analysis modes:
 
-- **real world**：按逻辑体积计分，选择要统计的体积及计分数量；
-- **probe**：在指定位置放置探针立方体，配置半长、材质与计分数量；
-- **voxel**：直角网格，配置网格范围（全几何或手动）、分箱数与计分数量。
+- **real world**: score logical volumes, choosing which volumes and quantities;
+- **probe**: place probe cubes with half size, material and quantities;
+- **voxel**: Cartesian mesh with extent (whole geometry or manual), bin counts and quantities.
 
-### 3. 运行
+### 3. Run
 
-点击 **▶️ Run** 打开运行启动器，勾选要运行的任务后启动。
-`RunManager` 以最多 2 个任务并发的方式排队执行：
+Click **▶️ Run**, check the tasks and start. `RunManager` queues them with at most
+2 concurrent tasks:
 
-- 每个任务在 `<结果根目录>/<任务名>/` 下生成 `run.mac` 并启动求解器；
-- 求解器 stdout/stderr 合并写入 `run.log`；
-- 进度条与状态（idle / queued / running / completed / failed / stopped）实时同步到
-  项目树与监控窗口；
-- 点击 **⏹ Stop** 可停止全部任务（先 `terminate`，2 秒后未退出则 `kill`）。
+- each task gets a work directory `<results_root>/<task>/` containing `run.mac`;
+- solver stdout/stderr are merged into `run.log`;
+- progress and status (idle / queued / running / completed / failed / stopped) are
+  mirrored to the project tree and the monitor dialog;
+- **⏹ Stop** terminates all tasks (`terminate`, then `kill` after 2 s).
 
-未配置求解器时，会以模拟进度运行，便于测试界面流程。
+Without a configured solver, a simulated progress run is used so the UI flow can be tested.
 
-### 4. 查看结果
+### 4. View results
 
-任务完成后，Project 树会自动挂上 Results 子树。双击结果节点：
+When a task finishes a Results subtree is attached. Double-clicking a result opens:
 
-| 结果 | 查看器 |
+| Result | Viewer |
 |---|---|
-| 体素网格（`q:`） | 3D 体素云图 |
-| 探针 / real world 计分（`pq:` / `rq:`） | 对比曲线图（matplotlib） |
-| 能谱直方图（`ph:` / `rh:`） | 对比曲线图 |
-| 粒子轨迹 | 轨迹查看器（按粒子类型着色） |
-| run log | 日志查看器 |
-| 其他文件 | 通用文件查看器 |
+| Voxel mesh (`q:`) | 3D voxel rendering |
+| Probe / real world scores (`pq:` / `rq:`) | Comparison chart (matplotlib) |
+| Histograms (`ph:` / `rh:`) | Comparison chart |
+| Trajectory | Trajectory viewer (coloured by particle) |
+| run log | Log viewer |
+| Other files | Generic file viewer |
 
-## 项目文件格式
+## Project Format
 
-一个项目就是一个文件夹：
+A project is a folder:
 
 ```
 MyProject/
-├── project.json          配置：几何引用 + 任务列表
-├── geometry/*.gdml       导入 GDML 的副本
-└── results/<task>/       每个任务运行输出的快照
+├── project.json          Config: geometry reference + task list
+├── geometry/*.gdml       Copy of the imported GDML
+└── results/<task>/       Snapshot of each task's run output
 ```
 
-`project.json` 字段：
+`project.json` fields:
 
-| 字段 | 说明 |
+| Field | Description |
 |---|---|
-| `format` | 固定为 `radsim-project`（兼容旧的 `3drad-project`） |
-| `version` | 当前为 `1` |
-| `gdml_paths` | 几何文件路径，复制到 `geometry/` 后存**相对路径**，便于整体迁移 |
-| `tasks` | 任务列表，每个任务包含 `name`、`analysis_type`、`particle`、`physics`、`calculate`、`analysis_config` 等 |
+| `format` | `radsim-project` (the legacy `3drad-project` is accepted) |
+| `version` | Currently `1` |
+| `gdml_paths` | Geometry paths, stored **relative** to the project folder after copying into `geometry/` |
+| `tasks` | Task list with `name`, `analysis_type`, `particle`, `physics`, `calculate`, `analysis_config`, ... |
 
-保存是“硬保存”：几何与 `results/` 全量镜像，删除任务同时删除其已保存结果。
-加载项目时会先清理草稿输出目录，再从 `project.json` 重建任务与结果树。
+Saving is a "hard save": geometry and `results/` are mirrored, and deleting a task also
+deletes its saved results. Loading clears the shared draft output folders first, then
+rebuilds tasks and the results tree.
 
-> 首次保存后项目文件夹即固定，之后再次保存会原地更新。
+> After the first save the project folder is fixed; later saves update it in place.
 
-## 输出文件
+## Output Files
 
-任务输出位于 `<结果根目录>/<任务名>/`（默认 `solver/runs/<任务名>/`）：
+Task output lives in `<results_root>/<task>/` (default `solver/runs/<task>/`):
 
-| 文件 | 说明 |
+| File | Description |
 |---|---|
-| `run.mac` | 本次运行使用的宏文件 |
-| `run.log` | 求解器标准输出 / 错误 |
-| `out_*.csv` | 各计分网格的积分值（每个 primitive scorer 一个块） |
-| `rad4space_h1_*.csv` | 一维能谱直方图 |
-| `Traj.csv` | 粒子轨迹点（`eventID, trackID, parentID, particle, step, x, y, z`） |
+| `run.mac` | Macro used for this run |
+| `run.log` | Solver stdout / stderr |
+| `out_*.csv` | Integrated values per scoring mesh |
+| `rad4space_h1_*.csv` | 1-D spectra |
+| `Traj.csv` | Trajectory points (`eventID, trackID, parentID, particle, step, x, y, z`) |
 
-## 配置持久化
+## Persisted Settings
 
-以下设置通过 `QSettings`（`RadSim/RadSim`）保存到注册表：
+Stored through `QSettings` (`RadSim/RadSim`):
 
-| 键 | 说明 |
+| Key | Description |
 |---|---|
-| `solver/executable` | 求解器可执行文件路径 |
-| `solver/qt_bin_dir` | 求解器所需的 Qt 运行时 bin 目录 |
-| `solver/results_root` | 任务输出根目录（默认 `solver/runs`） |
+| `solver/executable` | Solver executable path |
+| `solver/qt_bin_dir` | Qt runtime bin directory required by the solver |
+| `solver/results_root` | Results root (default `solver/runs`) |
 
-## 已知限制
+## Known Limitations
 
-- GDML `<materials>` 为简化解析，仅记录材料名与密度；
-- 部分实体类型（`polyhedra`、`xtru`、布尔运算、`multiUnion`、`scaledSolid` 等）
-  不参与 3D 渲染，仅在导出时原样写回，导入时会给出提示；
-- 表达式求值中未定义的标识符会被替换为 `0`；
-- 空心球（`rmin > 0`）在预览中简化为外壳，`cone` 以 16 段圆柱近似；
-- 一个项目只支持一个 GDML 几何；
-- GUI 内部长度单位为 **mm**，写入宏文件时统一换算为 **cm**；
-- 多线程运行时 `Traj.csv` 只包含被选中的那一个 worker 线程处理的事件，
-  需要完整轨迹时请在宏中固定 `/run/numberOfThreads 1`。
+- GDML `<materials>` parsing is simplified: only name and density are recorded;
+- Some solid types (`polyhedra`, `xtru`, booleans, `multiUnion`, `scaledSolid`, ...)
+  are not rendered in 3D and are only written back verbatim; a warning is shown on import;
+- Undefined identifiers in expressions evaluate to `0`;
+- Hollow spheres (`rmin > 0`) are previewed as shells and `cone` is approximated with
+  16 segments;
+- One GDML geometry per project;
+- GUI lengths are in **mm** and converted to **cm** when writing the macro;
+- With multiple threads `Traj.csv` only contains events of the single elected worker
+  thread; use `/run/numberOfThreads 1` for complete trajectories.
 
-## 开发说明
+## Development Notes
 
-- **线程模型**：仅大 GDML（≥ 500 KB）解析在 `QThread` 中进行，且只调用
-  线程安全的 `parse_file_only`，结果经队列信号回主线程原子替换；
-  其余 UI 与场景构建都在主线程。
-- **运行调度**：`RunManager` 全程非阻塞（`QProcess` + `QTimer` 心跳），
-  仅在启动时 `waitForStarted(3000)`、停止时 `waitForFinished(2000)` 做有限阻塞。
-- **VTK 窗口**：使用 `QVTKRenderWindowInteractor`，窗口隐藏 / 显示会重建原生窗口
-  导致 `WId` 变化，`VtkWidget` 检测到后重新绑定；关闭主窗口时先关闭所有二级窗口
-  以释放 GL 上下文。
-- **单例**：`GdmlAgent` 与 `AsyncLogger` 均为单例。
+- **Threading**: only large GDML files (>= 500 KB) are parsed in a `QThread`, calling
+  the thread-safe `parse_file_only`; the result is handed back to the main thread by a
+  queued signal. All other UI work happens on the main thread.
+- **Run scheduling**: `RunManager` is fully non-blocking (`QProcess` + `QTimer`
+  heartbeat), with only `waitForStarted(3000)` and `waitForFinished(2000)` blocking.
+- **VTK windows**: `QVTKRenderWindowInteractor` recreates the native window on
+  hide/show, changing the `WId`; `VtkWidget` rebinds when it changes. The main window
+  closes all secondary windows first to release their GL contexts.
+- **Singletons**: `GdmlAgent` and `AsyncLogger`.
 
-## 版本历史
+## Version History
 
-| 版本 | 日期 | 说明 |
+| Version | Date | Notes |
 |---|---|---|
-| 0.1.0 | 2026-09-09 | 首个版本：GDML 导入与 3D 浏览、任务配置、realworld / probe / voxel 三种分析、多任务运行调度、项目保存与加载、结果可视化 |
+| 0.1.0 | 2026-09-09 | First release: GDML import and 3D browsing, task configuration, realworld / probe / voxel analysis, multi-task run scheduling, project save/load, result visualisation |
 
-## 相关文档
+## Related Documents
 
-- **开发文档（模块级）**：[`doc/`](doc/README.md)
-  - [架构总览](doc/01-architecture.md) ｜ [GDML 处理链路](doc/02-gdml-pipeline.md) ｜ [run.mac 生成](doc/03-mac-builder.md)
-  - [运行调度](doc/04-execution.md) ｜ [分析与结果](doc/05-analysis.md) ｜ [项目保存与加载](doc/06-project-io.md)
-  - [可视化](doc/07-visualization.md) ｜ [界面参考](doc/08-ui-reference.md) ｜ [数据格式](doc/09-data-formats.md) ｜ [环境与排错](doc/10-troubleshooting.md)
-- 求解器说明与构建方法：[solver/rad4space/README.md](solver/rad4space/README.md)
-- 英文版说明：[README.en.md](README.en.md)
+- **Developer docs (module level)**: [`doc/`](doc/README.md)
+- Solver documentation: [solver/rad4space/README.en.md](solver/rad4space/README.en.md)
+- Chinese version: [README.md](README.md)
