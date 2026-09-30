@@ -1982,7 +1982,7 @@ class MainWindow(QMainWindow):
 
     def _on_help(self):
         QMessageBox.about(self, "About RadSim",
-            "RadSim v0.1.0\n\n"
+            "RadSim v1.0\n\n"
             "3D Radiation Simulation GUI for rad4space solver.\n\n"
             "Supported:\n"
             "  · GDML geometry import & render (box/sphere/tube/cone/tessellated...)\n"
