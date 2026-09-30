@@ -1,6 +1,12 @@
 # RadSim
 
-RadSim 是辐射求解器 [rad4space](solver/rad4space/README.md) 的图形前端（GUI）：
+**辐射仿真前端** —— 配置 Geant4 粒子源与物理过程，批量运行蒙特卡罗仿真，并查看剂量、通量、能谱与粒子轨迹。
+
+> **版本 0.1.0** ｜ 最后更新 2026-09-30 ｜ 英文版：[README.md](README.md)
+
+## 概述
+
+RadSim 是辐射求解器 [rad4space](solver/rad4space/README.zh.md) 的图形前端（GUI）：
 在 3D 视图中浏览 GDML 几何、可视化配置粒子源与物理过程、批量运行蒙特卡罗仿真，
 并直接查看体素剂量、探针通量、能谱和粒子轨迹等结果。
 
@@ -8,8 +14,6 @@ RadSim 是辐射求解器 [rad4space](solver/rad4space/README.md) 的图形前�
 - 界面：PyQt6 + VTK
 - 求解器：基于 Geant4 11.4.2 的 batch 可执行程序 `rad4space.exe`
 - 平台：Windows x64（当前仅在 Windows 上验证）
-
-> **版本 0.1.0** ｜ 最后更新 2026-09-09 ｜ 模块级开发文档见 [`doc/`](doc/README.md)
 
 ## 功能特性
 
@@ -32,7 +36,7 @@ RadSim 是辐射求解器 [rad4space](solver/rad4space/README.md) 的图形前�
 │ 📁 Import GDML │ 🧾 Load Project │ 💾 Save Project ┃ 🎯 Reset View ┃  │
 │ ▶️ Run │ 🟢 Idle │ ⏹ Stop ┃ ⚙️ Solver Setting │ ☀️ Theme │ ❓ Help  │
 ├──────────────┬───────────────────────────────────┬───────────────────┤
-│  Project 树  │          3D 视图 (VTK)            │  run.mac 预览     │
+│ Project Tree │          3D 视图 (VTK)            │  run.mac 预览     │
 │              ├───────────────────────────────────┤                   │
 │              │          系统日志                 │                   │
 ├──────────────┴───────────────────────────────────┴───────────────────┤
@@ -55,46 +59,18 @@ RadSim 是辐射求解器 [rad4space](solver/rad4space/README.md) 的图形前�
 | 🌙 / ☀️ Theme | 深色 / 浅色主题切换 |
 | ❓ Help | 帮助 |
 
-## 目录结构
+> 左侧面板标题为 `Project Tree`，其根行命名为 `Project of RadSim`，几何、任务与结果子树都挂在该根行下。
 
-```
-RadSim/
-├── main.py                     程序入口（QApplication + 主窗口）
-├── app/
-│   └── main_window.py          主窗口：布局、信号连接、任务编排、项目存取
-├── core/                       与界面解耦的核心逻辑
-│   ├── gdml_parser.py          GDML 解析（define/materials/solids/structure/setup）
-│   ├── gdml_tree.py            GDML 数据节点树（GdmlNode / Placement）
-│   ├── gdml_evaluator.py       GDML 属性表达式求值
-│   ├── gdml_writer.py          GDML 写回（多文件合并、位移覆盖、本地材料注入）
-│   ├── gdml_agent.py           GDML 数据代理（单例，统一入口）
-│   ├── materials_lib.py        材料库（NIST + 自定义元素 / 化合物 / 混合物）
-│   ├── mac_builder.py          生成 run.mac 与任务工作目录
-│   ├── collision_detector.py   实体 AABB 碰撞检测
-│   ├── run_manager.py          多任务运行调度（QProcess）
-│   ├── project_io.py           项目保存 / 加载（文件夹式）
-│   ├── project_model.py        RunTask / CalculateSetting 数据模型
-│   └── solver_config.py        求解器路径与结果目录（QSettings）
-├── vtk_engine/                 VTK 场景管理与实体工厂
-│   ├── vtk_scene.py            渲染窗口、actor 树、拾取 / 高亮
-│   └── vtk_solid_factory.py    按 GDML 实体类型构建 polydata / actor
-├── ui/                         PyQt 界面组件
-│   ├── ribbon_toolbar.py       Ribbon 工具栏
-│   ├── project_tree.py         项目树（几何 + 任务 + 结果）
-│   ├── vtk_widget.py           3D 视图控件
-│   ├── mac_preview.py          右侧 run.mac 预览面板
-│   ├── trajectory_viewer.py    粒子轨迹查看器
-│   ├── voxel_result_viewer.py  体素结果 3D 查看器
-│   ├── probe_result_viewer.py  计分结果读取与分组（无 Qt 依赖）
-│   ├── probe_chart_dialog.py   探针 / real world 对比图（matplotlib）
-│   └── dialogs/                各配置与结果对话框
-├── utils/logger.py             异步日志单例
-├── data/                       element.xml（元素表）、nist.txt（NIST 材料表）
-├── solver/                     rad4space 源码、构建产物与运行输出
-│   ├── rad4space/              求解器（C++，Geant4）
-│   └── runs/                   默认的任务输出根目录
-└── test/                       测试用 GDML 与样例数据
-```
+## 运行要求
+
+| 依赖 | 版本 |
+|---|---|
+| Python | 3.10（conda 环境 `easy2rad-env`） |
+| PyQt6 | == 6.4.2 |
+| VTK | == 9.3.1 —— 代码中以 `vtkmodules` 导入（PyPI 包名为 `vtk`） |
+| numpy | == 2.2.6 |
+| matplotlib | == 3.10.7 —— 可选，仅探针 / real world 对比图使用 |
+| rad4space.exe | 已构建好的求解器（Geant4 11.4.2 + Qt 6.11 运行时） |
 
 ## 安装
 
@@ -104,7 +80,7 @@ RadSim/
 
 ```bash
 conda env create -f environment.yml
-conda activate pyoccenv
+conda activate easy2rad-env
 python main.py
 ```
 
@@ -115,14 +91,13 @@ pip install -r requirements.txt
 python main.py
 ```
 
-> 代码中导入 VTK 使用 `vtkmodules`，对应的 PyPI 包名是 `vtk`。
 > `matplotlib` 仅在探针 / real world 对比图对话框中使用，缺失时该对话框会提示安装。
 
 ### 求解器 rad4space
 
 GUI 只是前端，真正的仿真由 `solver/rad4space/` 下的 Geant4 程序完成。
 仓库中已包含构建好的 `solver/rad4space/build/Release/rad4space.exe`；
-如需自行编译，参见 [solver/rad4space/README.md](solver/rad4space/README.md)
+如需自行编译，参见 [solver/rad4space/README.zh.md](solver/rad4space/README.zh.md)
 （依赖 Geant4 11.4.2、xerces-c、Qt 6.11）。
 
 求解器可执行文件路径与 Qt 运行时目录可在 **⚙️ Solver Setting** 中配置，
@@ -137,6 +112,8 @@ solver/rad4space/rad4space.exe
 > 注意：从 conda 环境启动求解器时，若其自带的旧版 Qt6 DLL 抢先加载，
 > 求解器会以 `0xC0000135` / `0xC0000139` 退出。RadSim 会在启动求解器前
 > 把配置的 Qt bin 目录前置到 `PATH`，因此在 Solver Setting 中填对 Qt 路径即可。
+> 此外还会探测一个写死在开发机上的 Qt 路径（`D:\Application\Qt6.11\...`），
+> 在其他机器上请显式配置该目录。
 
 ## 使用说明
 
@@ -196,6 +173,88 @@ solver/rad4space/rad4space.exe
 | run log | 日志查看器 |
 | 其他文件 | 通用文件查看器 |
 
+## 项目结构
+
+```
+RadSim/
+├── main.py                     程序入口（QApplication + 主窗口）
+├── app/
+│   └── main_window.py          主窗口：布局、信号连接、任务编排、项目存取
+├── core/                       与界面解耦的核心逻辑
+│   ├── gdml_parser.py          GDML 解析（define/materials/solids/structure/setup）
+│   ├── gdml_tree.py            GDML 数据节点树（GdmlNode / Placement）
+│   ├── gdml_evaluator.py       GDML 属性表达式求值
+│   ├── gdml_writer.py          GDML 写回（多文件合并、位移覆盖、本地材料注入）
+│   ├── gdml_agent.py           GDML 数据代理（单例，统一入口）
+│   ├── materials_lib.py        材料库（NIST + 自定义元素 / 化合物 / 混合物）
+│   ├── mac_builder.py          生成 run.mac 与任务工作目录
+│   ├── collision_detector.py   实体 AABB 碰撞检测
+│   ├── run_manager.py          多任务运行调度（QProcess）
+│   ├── project_io.py           项目保存 / 加载（文件夹式）
+│   ├── project_model.py        RunTask / CalculateSetting 数据模型
+│   └── solver_config.py        求解器路径与结果目录（QSettings）
+├── vtk_engine/                 VTK 场景管理与实体工厂
+│   ├── vtk_scene.py            渲染窗口、actor 树、拾取 / 高亮
+│   └── vtk_solid_factory.py    按 GDML 实体类型构建 polydata / actor
+├── ui/                         PyQt 界面组件
+│   ├── ribbon_toolbar.py       Ribbon 工具栏
+│   ├── project_tree.py         项目树（几何 + 任务 + 结果）
+│   ├── vtk_widget.py           3D 视图控件
+│   ├── vtk_view_window.py      独立 VTK 窗口（二级视图）
+│   ├── mac_preview.py          右侧 run.mac 预览面板
+│   ├── trajectory_viewer.py    粒子轨迹查看器
+│   ├── voxel_result_viewer.py  体素结果 3D 查看器
+│   ├── probe_result_viewer.py  计分结果读取与分组（无 Qt 依赖）
+│   ├── probe_chart_dialog.py   探针 / real world 对比图（matplotlib）
+│   └── dialogs/                各配置与结果对话框
+├── utils/logger.py             异步日志单例
+├── data/                       element.xml（元素表）、nist.txt（NIST 材料表）
+├── doc/                        模块级开发文档（中文，01-11）
+├── icon/                       应用图标（radsim.svg）
+├── solver/                     rad4space 源码、构建产物与运行输出
+│   ├── rad4space/              求解器（C++，Geant4）
+│   └── runs/                   默认的任务输出根目录
+├── test/                       测试用 GDML 与样例数据
+├── environment.yml             conda 环境（名称 easy2rad-env）
+├── requirements.txt            pip 方式安装依赖
+├── LICENSE                     MIT 许可
+├── README.md                   英文说明
+└── README.zh.md                本文件
+```
+
+## 架构
+
+界面与核心逻辑解耦，`core/` 不依赖 Qt，便于后续做无界面复用：
+
+```
+main.py
+└── app/main_window.py      布局、信号连接、任务编排、项目存取
+├── core/                   与界面无关的逻辑（GDML、材料、宏、项目、调度）
+│   └── gdml_agent.py       解析树与编辑覆盖层的单例门面
+├── vtk_engine/             场景管理与 actor 工厂（只负责渲染）
+├── ui/                     Ribbon 工具栏、项目树、各类查看器与对话框
+├── utils/logger.py         异步日志单例
+└── solver/                 rad4space（C++ / Geant4）与运行输出根目录
+```
+
+单个任务的数据流：
+
+```
+GDML 文件 ──► core/gdml_parser ──► GdmlAgent ──► vtk_engine/vtk_scene（3D 视图）
+                   │
+        core/mac_builder ──► run.mac ──► ui/mac_preview（实时预览）
+                   │
+                   └──► core/project_io ──► project.json + geometry/ + results/
+                                               │
+                              RunManager（QProcess）──► rad4space.exe
+                                               │
+                                               ▼
+                   results/<task>/（out_*.csv、rad4space_h1_*.csv、Traj.csv、run.log）
+                                               │
+                                               ▼
+                        ui 查看器（体素 / 探针 / 轨迹 / 日志）
+```
+
 ## 项目文件格式
 
 一个项目就是一个文件夹：
@@ -235,7 +294,7 @@ MyProject/
 
 ## 配置持久化
 
-以下设置通过 `QSettings`（`RadSim/RadSim`）保存到注册表：
+以下设置通过 `QSettings`（`RadSim/RadSim`）保存：
 
 | 键 | 说明 |
 |---|---|
@@ -249,7 +308,8 @@ MyProject/
 - 部分实体类型（`polyhedra`、`xtru`、布尔运算、`multiUnion`、`scaledSolid` 等）
   不参与 3D 渲染，仅在导出时原样写回，导入时会给出提示；
 - 表达式求值中未定义的标识符会被替换为 `0`；
-- 空心球（`rmin > 0`）在预览中简化为外壳，`cone` 以 16 段圆柱近似；
+- 空心球（`rmin > 0`）预览时仅显示外球，`cone` 以 16 段圆柱近似；
+- 运行日志查看器最多加载 `run.log` 末尾 2 MB 的内容；
 - 一个项目只支持一个 GDML 几何；
 - GUI 内部长度单位为 **mm**，写入宏文件时统一换算为 **cm**；
 - 多线程运行时 `Traj.csv` 只包含被选中的那一个 worker 线程处理的事件，
@@ -267,17 +327,24 @@ MyProject/
   以释放 GL 上下文。
 - **单例**：`GdmlAgent` 与 `AsyncLogger` 均为单例。
 
-## 版本历史
-
-| 版本 | 日期 | 说明 |
-|---|---|---|
-| 0.1.0 | 2026-09-09 | 首个版本：GDML 导入与 3D 浏览、任务配置、realworld / probe / voxel 三种分析、多任务运行调度、项目保存与加载、结果可视化 |
-
 ## 相关文档
 
-- **开发文档（模块级）**：[`doc/`](doc/README.md)
+- **模块级开发文档（中文）**：[`doc/`](doc/README.md)
   - [架构总览](doc/01-architecture.md) ｜ [GDML 处理链路](doc/02-gdml-pipeline.md) ｜ [run.mac 生成](doc/03-mac-builder.md)
   - [运行调度](doc/04-execution.md) ｜ [分析与结果](doc/05-analysis.md) ｜ [项目保存与加载](doc/06-project-io.md)
-  - [可视化](doc/07-visualization.md) ｜ [界面参考](doc/08-ui-reference.md) ｜ [数据格式](doc/09-data-formats.md) ｜ [环境与排错](doc/10-troubleshooting.md)
-- 求解器说明与构建方法：[solver/rad4space/README.md](solver/rad4space/README.md)
-- 英文版说明：[README.en.md](README.en.md)
+  - [可视化](doc/07-visualization.md) ｜ [界面参考](doc/08-ui-reference.md) ｜ [数据格式](doc/09-data-formats.md) ｜ [环境与排错](doc/10-troubleshooting.md) ｜ [Linux 移植](doc/11-linux-porting.md)
+- **求解器文档**：[solver/rad4space/README.zh.md](solver/rad4space/README.zh.md)
+- 本文件的英文版：[README.md](README.md)
+
+## 许可
+
+[MIT](LICENSE) © ready2run
+
+## 致谢
+
+- [OpenCASCADE Technology](https://dev.opencascade.org/) —— CAD 内核
+- [GMSH](https://gmsh.info/) —— 有限元网格生成器
+- [VTK](https://vtk.org/) —— 可视化工具包
+- [PythonOCC](https://github.com/tpaviot/pythonocc-core) —— OCC 的 Python 绑定
+- [Geant4](https://geant4.web.cern.ch/) —— GDML 几何格式
+- [CodeBuddy](https://www.codebuddy.ai/) 与 [DeepSeek](https://deepseek.com/) —— 本项目开发过程中的 AI 辅助

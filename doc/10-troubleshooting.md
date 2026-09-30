@@ -28,7 +28,7 @@ python main.py
 ```
 
 求解器：仓库已含 `solver/rad4space/build/Release/rad4space.exe`；
-自行编译见 `solver/rad4space/README.md`。
+自行编译见 `solver/rad4space/README.zh.md`。
 
 ## 3. 求解器与 Qt DLL 冲突（最常见问题）
 

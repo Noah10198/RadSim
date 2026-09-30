@@ -1,7 +1,13 @@
 # RadSim
 
+**Radiation simulation front-end** — configure Geant4 sources and physics, run Monte Carlo batches, and inspect dose, flux, spectra and trajectories.
+
+> **Version 0.1.0** ｜ Last updated 2026-09-30 ｜ Chinese version: [README.zh.md](README.zh.md)
+
+## Overview
+
 RadSim is a graphical front-end for the radiation solver
-[rad4space](solver/rad4space/README.en.md). It lets you inspect GDML geometry in 3D,
+[rad4space](solver/rad4space/README.md). It lets you inspect GDML geometry in 3D,
 configure particle sources and physics interactively, run Monte Carlo simulations in
 batch, and view voxel dose, probe flux, spectra and particle trajectories.
 
@@ -9,8 +15,6 @@ batch, and view voxel dose, probe flux, spectra and particle trajectories.
 - UI: PyQt6 + VTK
 - Solver: `rad4space.exe`, a Geant4 11.4.2 batch executable
 - Platform: Windows x64 (only Windows has been validated so far)
-
-> **Version 0.1.0** ｜ Last updated 2026-09-09 ｜ Module-level developer docs: [`doc/`](doc/README.md)
 
 ## Features
 
@@ -33,7 +37,7 @@ batch, and view voxel dose, probe flux, spectra and particle trajectories.
 │ 📁 Import GDML │ 🧾 Load Project │ 💾 Save Project ┃ 🎯 Reset View ┃  │
 │ ▶️ Run │ 🟢 Idle │ ⏹ Stop ┃ ⚙️ Solver Setting │ ☀️ Theme │ ❓ Help  │
 ├──────────────┬───────────────────────────────────┬───────────────────┤
-│ Project tree │          3D view (VTK)            │  run.mac preview  │
+│ Project Tree │          3D view (VTK)            │  run.mac preview  │
 │              ├───────────────────────────────────┤                   │
 │              │          System log               │                   │
 ├──────────────┴───────────────────────────────────┴───────────────────┤
@@ -54,46 +58,19 @@ batch, and view voxel dose, probe flux, spectra and particle trajectories.
 | 🌙 / ☀️ Theme | Toggle dark / light theme |
 | ❓ Help | Help |
 
-## Repository Layout
+> The left dock is titled `Project Tree`. Its root row is named `Project of RadSim`; the
+> geometry, task and result subtrees all hang under that row.
 
-```
-RadSim/
-├── main.py                     Entry point (QApplication + main window)
-├── app/
-│   └── main_window.py          Layout, signal wiring, task orchestration, project I/O
-├── core/                       UI-independent core logic
-│   ├── gdml_parser.py          GDML parser (define/materials/solids/structure/setup)
-│   ├── gdml_tree.py            GDML node tree (GdmlNode / Placement)
-│   ├── gdml_evaluator.py       GDML attribute expression evaluator
-│   ├── gdml_writer.py          GDML writer (multi-file merge, placement override)
-│   ├── gdml_agent.py           GDML data agent (singleton facade)
-│   ├── materials_lib.py        Material library (NIST + custom elements/compounds/mixtures)
-│   ├── mac_builder.py          run.mac generation and per-task work directory
-│   ├── collision_detector.py   AABB collision detection
-│   ├── run_manager.py          Multi-task run scheduler (QProcess)
-│   ├── project_io.py           Folder-based project save / load
-│   ├── project_model.py        RunTask / CalculateSetting data model
-│   └── solver_config.py        Solver path and results root (QSettings)
-├── vtk_engine/                 VTK scene management and solid factory
-│   ├── vtk_scene.py            Render window, actor tree, picking / highlight
-│   └── vtk_solid_factory.py    Build polydata / actors per GDML solid type
-├── ui/                         PyQt widgets
-│   ├── ribbon_toolbar.py       Ribbon toolbar
-│   ├── project_tree.py         Project tree (geometry + tasks + results)
-│   ├── vtk_widget.py           3D view widget
-│   ├── mac_preview.py          run.mac preview dock
-│   ├── trajectory_viewer.py    Particle trajectory viewer
-│   ├── voxel_result_viewer.py  Voxel result 3D viewer
-│   ├── probe_result_viewer.py  Scoring result reader / grouper (no Qt)
-│   ├── probe_chart_dialog.py   Probe / real world comparison charts (matplotlib)
-│   └── dialogs/                Configuration and result dialogs
-├── utils/logger.py             Async logger singleton
-├── data/                       element.xml, nist.txt
-├── solver/                     rad4space sources, build output and run output
-│   ├── rad4space/              The C++ / Geant4 solver
-│   └── runs/                   Default results root
-└── test/                       Test GDML files and sample data
-```
+## Requirements
+
+| Dependency | Version |
+|---|---|
+| Python | 3.10 (conda env `easy2rad-env`) |
+| PyQt6 | == 6.4.2 |
+| VTK | == 9.3.1 — imported as `vtkmodules` (PyPI package name is `vtk`) |
+| numpy | == 2.2.6 |
+| matplotlib | == 3.10.7 — optional, only used by the probe / real-world comparison charts |
+| rad4space.exe | Prebuilt solver binary (Geant4 11.4.2 + Qt 6.11 runtime) |
 
 ## Installation
 
@@ -104,7 +81,7 @@ full export of that environment:
 
 ```bash
 conda env create -f environment.yml
-conda activate pyoccenv
+conda activate easy2rad-env
 python main.py
 ```
 
@@ -115,7 +92,6 @@ pip install -r requirements.txt
 python main.py
 ```
 
-> The code imports VTK as `vtkmodules`; the PyPI package name is `vtk`.
 > `matplotlib` is only used by the probe / real-world comparison dialog and shows an
 > install hint when missing.
 
@@ -123,7 +99,7 @@ python main.py
 
 The GUI is only a front-end: the actual simulation is run by the Geant4 program under
 `solver/rad4space/`. A prebuilt `solver/rad4space/build/Release/rad4space.exe` is
-included; see [solver/rad4space/README.en.md](solver/rad4space/README.en.md) for
+included; see [solver/rad4space/README.md](solver/rad4space/README.md) for
 build instructions (Geant4 11.4.2, xerces-c, Qt 6.11).
 
 The solver executable and its Qt runtime directory can be set in
@@ -139,6 +115,8 @@ solver/rad4space/rad4space.exe
 > When launched from a conda environment, the solver may exit with `0xC0000135` /
 > `0xC0000139` if conda's older Qt6 DLLs are picked up first. RadSim prepends the
 > configured Qt bin directory to `PATH` before launching, so set it in Solver Setting.
+> The Qt bin directory is also probed at one hardcoded development path
+> (`D:\Application\Qt6.11\...`); on any other machine set it explicitly.
 
 ## Usage
 
@@ -198,6 +176,88 @@ When a task finishes a Results subtree is attached. Double-clicking a result ope
 | run log | Log viewer |
 | Other files | Generic file viewer |
 
+## Project Structure
+
+```
+RadSim/
+├── main.py                     Entry point (QApplication + main window)
+├── app/
+│   └── main_window.py          Layout, signal wiring, task orchestration, project I/O
+├── core/                       UI-independent core logic
+│   ├── gdml_parser.py          GDML parser (define/materials/solids/structure/setup)
+│   ├── gdml_tree.py            GDML node tree (GdmlNode / Placement)
+│   ├── gdml_evaluator.py       GDML attribute expression evaluator
+│   ├── gdml_writer.py          GDML writer (multi-file merge, placement override, local material injection)
+│   ├── gdml_agent.py           GDML data agent (singleton facade)
+│   ├── materials_lib.py        Material library (NIST + custom elements/compounds/mixtures)
+│   ├── mac_builder.py          run.mac generation and per-task work directory
+│   ├── collision_detector.py   AABB collision detection
+│   ├── run_manager.py          Multi-task run scheduler (QProcess)
+│   ├── project_io.py           Folder-based project save / load
+│   ├── project_model.py        RunTask / CalculateSetting data model
+│   └── solver_config.py        Solver path and results root (QSettings)
+├── vtk_engine/                 VTK scene management and solid factory
+│   ├── vtk_scene.py            Render window, actor tree, picking / highlight
+│   └── vtk_solid_factory.py    Build polydata / actors per GDML solid type
+├── ui/                         PyQt widgets
+│   ├── ribbon_toolbar.py       Ribbon toolbar
+│   ├── project_tree.py         Project tree (geometry + tasks + results)
+│   ├── vtk_widget.py           3D view widget
+│   ├── vtk_view_window.py      Standalone VTK window for secondary views
+│   ├── mac_preview.py          run.mac preview dock
+│   ├── trajectory_viewer.py    Particle trajectory viewer
+│   ├── voxel_result_viewer.py  Voxel result 3D viewer
+│   ├── probe_result_viewer.py  Scoring result reader / grouper (no Qt)
+│   ├── probe_chart_dialog.py   Probe / real world comparison charts (matplotlib)
+│   └── dialogs/                Configuration and result dialogs
+├── utils/logger.py             Async logger singleton
+├── data/                       element.xml, nist.txt
+├── doc/                        Module-level developer docs (Chinese, 01-11)
+├── icon/                       Application icon (radsim.svg)
+├── solver/                     rad4space sources, build output and run output
+│   ├── rad4space/              The C++ / Geant4 solver
+│   └── runs/                   Default results root
+├── test/                       Test GDML files and sample data
+├── environment.yml             Conda environment (name: easy2rad-env)
+├── requirements.txt            pip fallback
+├── LICENSE                     MIT license
+├── README.md                   This file
+└── README.zh.md                Chinese version of this file
+```
+
+## Architecture
+
+The GUI keeps the core logic free of Qt, so the same code could be reused headless:
+
+```
+main.py
+└── app/main_window.py      Layout, signal wiring, task orchestration, project I/O
+├── core/                   UI-independent logic (GDML, materials, macro, project, scheduling)
+│   └── gdml_agent.py       Singleton facade over the GDML parse tree + edit overlays
+├── vtk_engine/             Scene management and actor factory (rendering only)
+├── ui/                     Ribbon toolbar, project tree, viewers, dialogs
+├── utils/logger.py         Async logger singleton
+└── solver/                 rad4space (C++ / Geant4) and the run output root
+```
+
+Data flow of one task:
+
+```
+GDML file ──► core/gdml_parser ──► GdmlAgent ──► vtk_engine/vtk_scene (3D view)
+                   │
+        core/mac_builder ──► run.mac ──► ui/mac_preview (live preview)
+                   │
+                   └──► core/project_io ──► project.json + geometry/ + results/
+                                               │
+                              RunManager (QProcess) ──► rad4space.exe
+                                               │
+                                               ▼
+                        results/<task>/ (out_*.csv, rad4space_h1_*.csv, Traj.csv, run.log)
+                                               │
+                                               ▼
+                              ui viewers (voxel / probe / trajectory / log)
+```
+
 ## Project Format
 
 A project is a folder:
@@ -252,8 +312,9 @@ Stored through `QSettings` (`RadSim/RadSim`):
 - Some solid types (`polyhedra`, `xtru`, booleans, `multiUnion`, `scaledSolid`, ...)
   are not rendered in 3D and are only written back verbatim; a warning is shown on import;
 - Undefined identifiers in expressions evaluate to `0`;
-- Hollow spheres (`rmin > 0`) are previewed as shells and `cone` is approximated with
-  16 segments;
+- Hollow spheres (`rmin > 0`) are previewed with their outer sphere only and `cone` is
+  approximated with 16 segments;
+- The run log viewer loads at most the last 2 MB of `run.log`;
 - One GDML geometry per project;
 - GUI lengths are in **mm** and converted to **cm** when writing the macro;
 - With multiple threads `Traj.csv` only contains events of the single elected worker
@@ -271,14 +332,24 @@ Stored through `QSettings` (`RadSim/RadSim`):
   closes all secondary windows first to release their GL contexts.
 - **Singletons**: `GdmlAgent` and `AsyncLogger`.
 
-## Version History
-
-| Version | Date | Notes |
-|---|---|---|
-| 0.1.0 | 2026-09-09 | First release: GDML import and 3D browsing, task configuration, realworld / probe / voxel analysis, multi-task run scheduling, project save/load, result visualisation |
-
 ## Related Documents
 
-- **Developer docs (module level)**: [`doc/`](doc/README.md)
-- Solver documentation: [solver/rad4space/README.en.md](solver/rad4space/README.en.md)
-- Chinese version: [README.md](README.md)
+- **Module-level developer docs (Chinese)**: [`doc/`](doc/README.md)
+  - [Architecture](doc/01-architecture.md) ｜ [GDML pipeline](doc/02-gdml-pipeline.md) ｜ [run.mac generation](doc/03-mac-builder.md)
+  - [Execution](doc/04-execution.md) ｜ [Analysis and results](doc/05-analysis.md) ｜ [Project I/O](doc/06-project-io.md)
+  - [Visualization](doc/07-visualization.md) ｜ [UI reference](doc/08-ui-reference.md) ｜ [Data formats](doc/09-data-formats.md) ｜ [Troubleshooting](doc/10-troubleshooting.md) ｜ [Linux porting](doc/11-linux-porting.md)
+- **Solver documentation**: [solver/rad4space/README.md](solver/rad4space/README.md)
+- Chinese version of this file: [README.zh.md](README.zh.md)
+
+## License
+
+[MIT](LICENSE) © ready2run
+
+## Acknowledgments
+
+- [OpenCASCADE Technology](https://dev.opencascade.org/) — CAD kernel
+- [GMSH](https://gmsh.info/) — Finite element mesh generator
+- [VTK](https://vtk.org/) — Visualization Toolkit
+- [PythonOCC](https://github.com/tpaviot/pythonocc-core) — Python bindings for OCC
+- [Geant4](https://geant4.web.cern.ch/) — GDML geometry format
+- [CodeBuddy](https://www.codebuddy.ai/) & [DeepSeek](https://deepseek.com/) — AI-assisted development throughout this project
