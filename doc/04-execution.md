@@ -1,23 +1,36 @@
-# 04 · 运行调度与求解器执行
+# 04 · Run Dispatch and Solver Execution
 
-> 源码：`core/run_manager.py`、`core/solver_config.py`、`core/mac_builder.py`
-> 界面：`ui/dialogs/run_monitor.py`
+> Source: `core/run_manager.py`, `core/solver_config.py`, `core/mac_builder.py`
+> UI: `ui/dialogs/run_monitor.py`
 
-## 1. 职责
+## Contents
 
-`RunManager` 是一个 **独立的任务队列**，负责：
+- [1. Responsibility](#1-responsibility)
+- [2. State machine](#2-state-machine)
+- [3. Signals](#3-signals)
+- [4. Public API](#4-public-api)
+- [5. Queueing and pumping](#5-queueing-and-pumping)
+- [6. The real solver path](#6-the-real-solver-path)
+- [7. Simulation mode (the fallback without a solver)](#7-simulation-mode-the-fallback-without-a-solver)
+- [8. Stopping and cleanup](#8-stopping-and-cleanup)
+- [9. Directory conventions](#9-directory-conventions)
+- [10. Troubleshooting checklist](#10-troubleshooting-checklist)
 
-- 接收一批任务并排队；
-- 按并发上限（默认 `max_concurrent = 2`）逐个拉起；
-- 通过 `QProcess` 启动真实求解器（或降级为模拟进度）；
-- 把求解器控制台输出重定向到每个任务的 `run.log`；
-- 通过 Qt 信号向界面广播状态与进度；
-- 支持停止单个 / 全部任务。
+## 1. Responsibility
 
-它**不关心**任务怎么配置——配置在启动前已经写进 `RunTask`，并由 `mac_builder`
-落到 `run.mac`。
+`RunManager` is a **standalone task queue** responsible for:
 
-## 2. 状态机
+- accepting a batch of tasks and queueing them;
+- starting them one by one up to a concurrency limit (`max_concurrent = 2` by default);
+- launching the real solver through `QProcess` (or degrading to simulated progress);
+- redirecting the solver's console output into each task's `run.log`;
+- broadcasting status and progress to the UI over Qt signals;
+- stopping one task or all of them.
+
+It **does not care** how a task was configured: that has already been written onto the `RunTask`
+and turned into `run.mac` by `mac_builder` before the start.
+
+## 2. State machine
 
 ```
 idle ──start()──> queued ──_pump()──> running ──┬─> completed
@@ -25,47 +38,48 @@ idle ──start()──> queued ──_pump()──> running ──┬─> comp
   └────────────────────────────────────────────┴─> stopped
 ```
 
-| 状态 | 含义 |
+| State | Meaning |
 |---|---|
-| `idle` | 已创建，未排队 |
-| `queued` | 已入队，等待并发名额 |
-| `running` | 进程已拉起（或模拟计时器在跑） |
-| `completed` | 进程退出码 0 |
-| `failed` | 退出码非 0，或启动失败 / 宏写入失败 |
-| `stopped` | 用户主动停止 |
+| `idle` | created, not queued |
+| `queued` | queued, waiting for a concurrency slot |
+| `running` | the process has been started (or the simulation timer runs) |
+| `completed` | the process exited with code 0 |
+| `failed` | non-zero exit code, a failed launch, or a failed macro write |
+| `stopped` | stopped by the user |
 
-## 3. 对外信号
+## 3. Signals
 
-| 信号 | 参数 | 触发时机 |
+| Signal | Arguments | Emitted when |
 |---|---|---|
 | `task_added` | `RunTask` | `add_task()` |
-| `task_started` | `name` | 任务从队列进入运行 |
-| `task_progress` | `name, percent` | 心跳计时器 |
-| `task_finished` | `name, status` | 结束 / 失败 / 停止 |
-| `all_finished` | — | 队列与运行集合都空了 |
+| `task_started` | `name` | a task leaves the queue and starts |
+| `task_progress` | `name, percent` | on the heartbeat timer |
+| `task_finished` | `name, status` | finished / failed / stopped |
+| `all_finished` | — | both the queue and the running set are empty |
 
-`run_monitor.py` 里的监控窗口订阅这些信号，刷新表格与进度条；主窗口用
-`task_finished` 决定何时刷新结果树。
+The monitor windows in `run_monitor.py` subscribe to these signals to refresh their tables and
+progress bars; the main window uses `task_finished` to decide when to refresh the result tree.
 
-## 4. 公开 API
+## 4. Public API
 
 ```python
 rm = RunManager(parent, max_concurrent=2)
 
-rm.configure_solver(exe, gdml_full_path, out_root)   # 绑定真实求解器
-rm.solver_configured() -> bool                        # 是否具备真实运行条件
-rm.add_task(task)                                     # 登记任务
-rm.start([names]) / rm.start_all()                    # 入队并开始泵送
-rm.stop_task(name) / rm.stop_all()                    # 停止
+rm.configure_solver(exe, gdml_full_path, out_root)   # bind the real solver
+rm.solver_configured() -> bool                        # can it really run?
+rm.add_task(task)                                     # register a task
+rm.start([names]) / rm.start_all()                    # queue and start pumping
+rm.stop_task(name) / rm.stop_all()                    # stop
 rm.is_running_any() -> bool
 rm.get_task(name) / rm.running_names()
-rm.clear()                                            # 清空全部状态（换几何 / 载入项目）
+rm.clear()                                            # drop all state (new geometry / project load)
 ```
 
-`configure_solver()` 中，`exe` 为 `None` 或文件不存在时会被归一化为 `None`，
-运行随即进入**模拟模式**——这让界面流程在没有求解器的机器上也能跑通。
+In `configure_solver()`, an `exe` of `None` — or one pointing at a missing file — is normalized to
+`None` and the run then enters **simulation mode**, which lets the UI flow be exercised on a
+machine without the solver.
 
-## 5. 排队与泵送
+## 5. Queueing and pumping
 
 ```python
 def _pump(self):
@@ -73,20 +87,21 @@ def _pump(self):
         self._spawn(self._queue.pop(0))
 ```
 
-- 先进先出；
-- 每完成 / 停止一个任务都会再次 `_pump()`，自动补位；
-- 已处于 `running` / `queued` 的任务重复 `start()` 会被忽略。
+- first in, first out;
+- every finished or stopped task triggers another `_pump()`, which fills the free slot;
+- calling `start()` again for a task already `running` or `queued` is ignored.
 
-## 6. 真实求解器路径
+## 6. The real solver path
 
-### 6.1 启动前
+### 6.1 Before launch
 
-1. `write_workdir(gdml_path, task, out_root)` 生成工作目录并写入 `run.mac`；
-   写失败直接判 `failed`；
-2. 命令行参数只有一个：`[<workdir>/run.mac]`；
-3. `QProcess.setWorkingDirectory(workdir)`——求解器的相对输出都落在工作目录里。
+1. `write_workdir(gdml_path, task, out_root)` creates the working directory and writes `run.mac`;
+   a failure here is reported as `failed` immediately;
+2. the command line carries a single argument: `[<workdir>/run.mac]`;
+3. `QProcess.setWorkingDirectory(workdir)` — every relative output of the solver lands in the
+   working directory.
 
-### 6.2 环境变量（Windows 上的关键一步）
+### 6.2 Environment variables (the decisive step on Windows)
 
 ```python
 env = QProcessEnvironment.systemEnvironment()
@@ -94,77 +109,81 @@ dll_dirs = runtime_dll_dirs()          # core/solver_config.py
 env.insert("PATH", os.pathsep.join(dll_dirs) + os.pathsep + cur)
 ```
 
-求解器是链接 Qt6 DLL 的 Geant4 程序。如果 GUI 从 conda 环境启动，conda 自带的
-旧版 Qt6 DLL 会抢先加载，求解器启动即失败（`0xC0000135` 找不到 DLL /
-`0xC0000139` 找不到入口）。把正确的 Qt `bin` 目录**前置**到 `PATH` 即可解决。
+The solver is a Geant4 program linked against the Qt6 DLLs. When the GUI is started from a conda
+environment, conda's older Qt6 DLLs are loaded first and the solver fails at start-up
+(`0xC0000135`, DLL not found, or `0xC0000139`, entry point not found). Putting the correct Qt `bin`
+directory **in front of** `PATH` solves it.
 
-`runtime_dll_dirs()` 的顺序：用户在 **Solver Setting** 里配置的 `solver/qt_bin_dir`
-优先，其次是 `DEFAULT_QT_BIN_DIRS` 里的开发机路径；非 Windows 返回空列表。
+Order used by `runtime_dll_dirs()`: the `solver/qt_bin_dir` configured by the user in **Solver
+Setting** first, then the development-machine paths in `DEFAULT_QT_BIN_DIRS`; the list is empty on
+non-Windows platforms.
 
-### 6.3 日志重定向
+### 6.3 Log redirection
 
-- `setProcessChannelMode(MergedChannels)`：stdout + stderr 合并；
-- `run.log` 以二进制打开，`readyReadStandardOutput` → `_read_solver_output()`
-  边读边写边 flush；
-- 进程结束时 `_close_log()` 再读一次残余数据并关闭文件；
-- 路径写进 `task.run_log`（**不持久化**到 `project.json`），供结果树里的
-  “run log” 节点打开。
+- `setProcessChannelMode(MergedChannels)`: stdout and stderr merged;
+- `run.log` is opened in binary mode and `readyReadStandardOutput` → `_read_solver_output()`
+  writes and flushes as data arrives;
+- when the process ends, `_close_log()` reads the remainder once more and closes the file;
+- the path is stored in `task.run_log` (**not persisted** to `project.json`) so that the
+  "run log" node in the result tree can open it.
 
-### 6.4 进度
+### 6.4 Progress
 
-真实进程的进度是**不确定的**（Geant4 不输出百分比）：心跳计时器每 300 ms 让
-进度 `+2`，封顶 99，进程退出后才置 100。所以进度条只表示“还活着”，不表示真实完成度。
+The progress of a real process is **indeterminate** (Geant4 prints no percentage): the heartbeat
+timer adds `+2` every 300 ms, capped at 99, and only reaches 100 once the process exits. The bar
+therefore means "still alive", not "this much done".
 
-### 6.5 结束
+### 6.5 Finishing
 
 ```python
 def _on_proc_finished(self, name, code):
     status = "completed" if code == 0 else "failed"
 ```
 
-`_finish()` 会：停掉心跳计时器 → 确保进程已退出（未退出则 `kill`）→ 关闭日志 →
-从运行集合移除 → 写入 `task.run_time` → 发 `task_finished` → `_pump()` 补位 →
-必要时发 `all_finished`。
+`_finish()` stops the heartbeat timer → makes sure the process is gone (`kill` if not) → closes the
+log → removes the task from the running set → writes `task.run_time` → emits `task_finished` →
+`_pump()` to fill the slot → emits `all_finished` when nothing is left.
 
-`run_time` 用 `time.monotonic()` 计时，格式化为 `HH:MM:SS`。
+`run_time` is measured with `time.monotonic()` and formatted as `HH:MM:SS`.
 
-## 7. 模拟模式（无求解器时的降级）
+## 7. Simulation mode (the fallback without a solver)
 
-`solver_configured()` 为假时，用 `QTimer`（200 ms 一跳、每跳 +10%）模拟进度，
-到 100% 判 `completed`。用于界面开发与流程自测，**不产生任何结果文件**。
+When `solver_configured()` is false, a `QTimer` (one tick per 200 ms, +10 % per tick) simulates
+progress and reports `completed` at 100 %. It exists for UI development and flow testing and
+**produces no result files**.
 
-## 8. 停止与清理
+## 8. Stopping and cleanup
 
-| 操作 | 行为 |
+| Operation | Behaviour |
 |---|---|
-| `stop_task(name)` | 运行中：`terminate()`，2 秒内未退出则 `kill()`；排队中：直接出队并置 `stopped` |
-| `stop_all()` | 对运行中与排队中的任务逐个执行上述逻辑 |
-| `clear()` | 先 `stop_all()`，再停计时器、`kill` 残留进程、关闭全部日志句柄、清空任务表 / 队列 / 运行集合 |
+| `stop_task(name)` | running: `terminate()`, then `kill()` if it has not exited within 2 s; queued: removed from the queue and marked `stopped` |
+| `stop_all()` | applies the logic above to every running and queued task |
+| `clear()` | `stop_all()` first, then stop the timers, `kill` any surviving process, close every log handle, and empty the task table / queue / running set |
 
-`clear()` 在主窗口“导入新几何”“载入项目”等场景被调用，确保上一个项目的进程和
-句柄不会泄漏到下一个项目。
+The main window calls `clear()` when importing new geometry or loading a project, so that the
+processes and file handles of the previous project cannot leak into the next one.
 
-## 9. 目录约定
+## 9. Directory conventions
 
 ```
-solver/runs/                 # get_results_root()，可被 QSettings 覆盖
-└── <safe_task_name>/        # safe_task_name = 非法字符替换为 _
+solver/runs/                 # get_results_root(), overridable through QSettings
+└── <safe_task_name>/        # safe_task_name = illegal characters replaced by _
     ├── run.mac
     ├── run.log
     ├── out_<mesh>.csv       # realworld / probe
     ├── out_Box_<q>.csv      # voxel
-    └── rad4space_h1_*.csv   # 一维直方图
+    └── rad4space_h1_*.csv   # 1D histograms
 ```
 
-草稿输出留在 `solver/runs`；保存项目时由 `project_io.save_project()` 镜像到
-`<项目>/results/<task>/`（见 [06-project-io.md](06-project-io.md)）。
+Draft output stays in `solver/runs`; saving a project mirrors it into `<project>/results/<task>/`
+via `project_io.save_project()` (see [06-project-io.md](06-project-io.md)).
 
-## 10. 排错清单
+## 10. Troubleshooting checklist
 
-| 现象 | 排查方向 |
+| Symptom | Where to look |
 |---|---|
-| 任务瞬间 `failed` | 求解器路径是否配置正确；`run.log` 里是否有 `0xC0000135/0xC0000139` |
-| `run.log` 为空 | 进程未成功启动（`waitForStarted` 3 秒超时） |
-| 进度条停在 99% | 进程仍在运行，属正常表现 |
-| 结果文件缺失 | 宏里 dump 命令是否在 beamOn 之后；任务是否真的 `completed` |
-| 重跑后结果混乱 | `write_workdir` 会清空任务目录，若手动放了文件会被删除 |
+| a task goes `failed` instantly | is the solver path configured correctly, and does `run.log` mention `0xC0000135` / `0xC0000139`? |
+| `run.log` is empty | the process never started (`waitForStarted` timed out after 3 s) |
+| the progress bar sticks at 99 % | the process is still running; this is normal |
+| result files are missing | is the dump command after beamOn, and did the task really reach `completed`? |
+| results are mixed up after a re-run | `write_workdir` wipes the task directory, so files placed there by hand are deleted |

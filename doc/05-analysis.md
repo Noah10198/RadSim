@@ -1,20 +1,31 @@
-# 05 · 分析与结果
+# 05 · Analysis and Results
 
-> 源码：`ui/dialogs/analysis_common.py`、`ui/dialogs/{realworld,probe,voxel}_dialog.py`、
-> `core/mac_builder.py`、`ui/probe_result_viewer.py`
+> Source: `ui/dialogs/analysis_common.py`, `ui/dialogs/{realworld,probe,voxel}_dialog.py`,
+> `core/mac_builder.py`, `ui/probe_result_viewer.py`
 
-## 1. 三种分析模式
+## Contents
 
-| kind | 计分对象 | 网格 | 输出 | 查看器 |
+- [1. The three analysis modes](#1-the-three-analysis-modes)
+- [2. Configuration data structure](#2-configuration-data-structure)
+- [3. Scoring quantity list](#3-scoring-quantity-list)
+- [4. Filters and particle options](#4-filters-and-particle-options)
+- [5. 1D histogram rules](#5-1d-histogram-rules)
+- [6. Result parsing and grouping](#6-result-parsing-and-grouping)
+- [7. Result nodes in the project tree](#7-result-nodes-in-the-project-tree)
+- [8. Common pitfalls](#8-common-pitfalls)
+
+## 1. The three analysis modes
+
+| kind | What is scored | Mesh | Output | Viewer |
 |---|---|---|---|---|
-| `realworld` | 逻辑体积（LogicalVolume） | 每体积一个 scorer | `out_<LV>.csv` | 柱状图 / 能谱 |
-| `probe` | 探针立方体 | 每探针一个 scorer | `out_<probe>.csv` | 柱状图 / 能谱 |
-| `voxel` | 直角网格 | 单个 `boxMesh` | `out_Box_<q>.csv` | 3D 体渲染 |
+| `realworld` | logical volumes | one scorer per volume | `out_<LV>.csv` | bar chart / spectrum |
+| `probe` | probe cubes | one scorer per probe | `out_<probe>.csv` | bar chart / spectrum |
+| `voxel` | a rectilinear mesh | a single `boxMesh` | `out_Box_<q>.csv` | 3D volume rendering |
 
-三种模式**可同时启用**，判定标准是「该模式下至少配置了一个计分数量」
-（`mac_builder._kind_is_active`）。
+The three modes **can be enabled together**; the test is "does this mode have at least one scoring
+quantity configured" (`mac_builder._kind_is_active`).
 
-## 2. 配置数据结构
+## 2. Configuration data structure
 
 ```python
 task.analysis_config = {
@@ -24,16 +35,17 @@ task.analysis_config = {
 }
 ```
 
-- `qs`：计分数量列表，每项 `{"name": str, "type": str, "filter": str | None}`
-- `hs`：一维直方图列表，每项 `{"q": <quantity name>, "bins": int, "rng": [lo, hi], "log": bool}`
-- `half` / `x,y,z` / `center` 单位均为 **mm**（写入宏时 ÷10 变 cm）
-- `voxel.mode`：`all_geo`（自动取整个几何包围盒）或 `manual`（手填 center/half）
+- `qs`: the scoring quantity list, each entry `{"name": str, "type": str, "filter": str | None}`
+- `hs`: the 1D histogram list, each entry `{"q": <quantity name>, "bins": int, "rng": [lo, hi], "log": bool}`
+- `half` / `x,y,z` / `center` are all in **mm** (divided by 10 when written to the macro)
+- `voxel.mode`: `all_geo` (take the bounding box of the whole geometry) or `manual` (enter
+  centre/half by hand)
 
-## 3. 计分数量清单
+## 3. Scoring quantity list
 
-权威定义在 `analysis_common.QUANTITY_TYPES`（`type, 标签, 单位, 直方图x单位`）：
+The authority is `analysis_common.QUANTITY_TYPES` (`type, label, unit, histogram x unit`):
 
-| type | 单位 | 直方图 x 单位 |
+| type | Unit | Histogram x unit |
 |---|---|---|
 | `energyDeposit` | MeV | MeV |
 | `doseDeposit` | Gy | Gy |
@@ -45,75 +57,80 @@ task.analysis_config = {
 | `passageCellFlux` | cm⁻² | MeV |
 | `passageCellCurrent` | — | MeV |
 | `passageTrackLength` | mm | mm |
-| `trackLength` | mm | 不支持 |
-| `cellCharge` | e⁺ | 不支持 |
-| `nOfCollision` | — | 不支持 |
-| `nOfTerminatedTrack` | — | 不支持 |
-| `population` | — | 不支持 |
+| `trackLength` | mm | not supported |
+| `cellCharge` | e⁺ | not supported |
+| `nOfCollision` | — | not supported |
+| `nOfTerminatedTrack` | — | not supported |
+| `population` | — | not supported |
 
-单位列为空时界面显示 `[count]`。只有 `energyDeposit` / `doseDeposit` 在宏里写单位，
-其余按求解器原生单位输出（见 `mac_builder._QUANTITY_UNIT`）。
+An empty unit column is shown as `[count]` in the UI. Only `energyDeposit` / `doseDeposit` carry a
+unit inside the macro; everything else is emitted in the solver's native unit (see
+`mac_builder._QUANTITY_UNIT`).
 
-## 4. 过滤器与粒子选项
+## 4. Filters and particle options
 
-`FILTER_TYPES`（Geant4 只实现这 5 种）：`particle`、`kineticEnergy`、
-`particleWithEnergy`、`charged`、`neutral`。
+`FILTER_TYPES` (the only five Geant4 implements): `particle`, `kineticEnergy`,
+`particleWithEnergy`, `charged`, `neutral`.
 
-`PARTICLE_CHOICES`：gamma、e-、e+、proton、neutron、alpha、He3、deuteron、triton、
-mu-、mu+、pi-、pi+。
+`PARTICLE_CHOICES`: gamma, e-, e+, proton, neutron, alpha, He3, deuteron, triton, mu-, mu+, pi-,
+pi+.
 
-`ENERGY_UNITS`：MeV、keV、GeV。
-`MATERIAL_CHOICES`（探针）：none、G4_WATER、G4_AIR、G4_Al、G4_Cu、G4_Fe、G4_Pb。
+`ENERGY_UNITS`: MeV, keV, GeV.
+`MATERIAL_CHOICES` (probes): none, G4_WATER, G4_AIR, G4_Al, G4_Cu, G4_Fe, G4_Pb.
 
-## 5. 一维直方图规则
+## 5. 1D histogram rules
 
-1. 仅当 `quantity_meta(type)[1] is not None` 时支持，否则该行被静默跳过；
-2. 默认区间按数量类型给（`HISTOGRAM_DEFAULT_RANGES`），如 `energyDeposit (0.001, 10)`、
-   `doseDeposit (0.0001, 1)`；未定类型时用 `(0.001, 1000)`；
-3. **同一数量类型的所有 series 必须共用 bins / range / log**，否则叠加在一张图上
-   x 轴不对齐。`histogram_parameter_conflicts()` 在用户还在表单上时就给出警告；
-4. 直方图 id 由 `mac_builder` 里的**全局计数器**分配（`/score/fill1D <id> <mesh> <q>`），
-   多网格时必须连续递增。
+1. supported only when `quantity_meta(type)[1] is not None`; otherwise the row is skipped
+   silently;
+2. the default range follows the quantity type (`HISTOGRAM_DEFAULT_RANGES`), e.g.
+   `energyDeposit (0.001, 10)` and `doseDeposit (0.0001, 1)`; an unknown type falls back to
+   `(0.001, 1000)`;
+3. **every series of the same quantity type must share bins / range / log**, otherwise the x axes
+   do not line up once they are overlaid. `histogram_parameter_conflicts()` warns about this while
+   the user is still editing the form;
+4. histogram ids are handed out by a **single global counter** in `mac_builder`
+   (`/score/fill1D <id> <mesh> <q>`), and must keep increasing when several meshes are active.
 
-## 6. 结果解析与分组
+## 6. Result parsing and grouping
 
-`probe_result_viewer.py` 是纯数据模块（不 import Qt / matplotlib）：
+`probe_result_viewer.py` is a pure data module (it imports neither Qt nor matplotlib):
 
-| 函数 | 输入 | 输出 |
+| Function | Input | Output |
 |---|---|---|
-| `parse_out_csv` | `out_*.csv` | `{"mesh", "blocks": [{name, unit, value, entry}]}`，单位从 `# ... [MeV]` 图例行回读 |
+| `parse_out_csv` | `out_*.csv` | `{"mesh", "blocks": [{name, unit, value, entry}]}`, the unit read back from a `# ... [MeV]` legend line |
 | `parse_h1_csv` | `rad4space_h1_*.csv` | `{nbins, lo, hi, log, edges, centers, counts, total, underflow, overflow, title}` |
-| `rebin_log` | 线性直方图 | 某些构建即使配置为 log 也写 `#axis fixed`，此处按同 lo/hi/nbins 在 log10 轴重建 |
-| `build_result_groups` | `entities`（name/qs/hs）+ work_dir | `{"quantity": [...], "histogram": [...]}` |
-| `build_probe_result_groups` | probes 列表 + work_dir | 同上 |
-| `find_group` | groups + kind + label | 单个分组 |
+| `rebin_log` | a linear histogram | some builds write `#axis fixed` even when configured for log, so the histogram is rebuilt on a log10 axis with the same lo/hi/nbins |
+| `build_result_groups` | `entities` (name/qs/hs) + work_dir | `{"quantity": [...], "histogram": [...]}` |
+| `build_probe_result_groups` | probe list + work_dir | as above |
+| `find_group` | groups + kind + label | one group |
 
-**分组键是数量类型（type），不是数量名**——所以 P1/P2/P3 的 `doseDeposit` 会归入
-同一组比较，组标签形如 `doseDeposit [Gy]`。文件缺失的 series 被丢弃，空组被移除。
+**The grouping key is the quantity type, not the quantity name** — so `doseDeposit` from P1, P2 and
+P3 lands in the same group for comparison, labelled `doseDeposit [Gy]`. Series whose file is
+missing are dropped and empty groups are removed.
 
-## 7. 项目树里的结果节点
+## 7. Result nodes in the project tree
 
-任务完成后 `_refresh_task_results()` 先清空再按磁盘重建：
+When a task finishes, `_refresh_task_results()` clears and rebuilds from disk:
 
 ```
 <task>
 └── Results
-    ├── <type [unit]>          ← quantity 组，双击开柱状图
+    ├── <type [unit]>          ← quantity group, double-click opens a bar chart
     │   ├── <probe1>: <qname>
     │   └── <probe2>: <qname>
-    ├── <type [xunit]>         ← histogram 组，双击开阶梯曲线
-    ├── Voxel <qname>          ← 双击开 3D 体渲染
-    ├── Trajectory             ← 双击开轨迹查看器
+    ├── <type [xunit]>         ← histogram group, double-click opens a step curve
+    ├── Voxel <qname>          ← double-click opens 3D volume rendering
+    ├── Trajectory             ← double-click opens the trajectory viewer
     └── run log
 ```
 
-## 8. 常见陷阱
+## 8. Common pitfalls
 
-| 陷阱 | 说明 |
+| Pitfall | Explanation |
 |---|---|
-| 数量名重复 | 同一网格内重名会让 dump 文件互相覆盖 |
-| 只配 `hs` 不配 `qs` | 该数量不会被创建，直方图也无数据 |
-| 探针材质选 `none` | 宏里不写 `/score/probe/material`，使用求解器默认 |
-| voxel 手填 `half` 过大 | 体渲染内存按 `(nbin+1)³` 增长 |
-| 直方图 bins 不一致 | 曲线对比失真，对话框会提前警告 |
-| 改了数量类型但没改名字 | 结果分组按 type 走，名字只作显示 |
+| duplicate quantity names | a repeated name inside one mesh makes the dump files overwrite each other |
+| an `hs` without a matching `qs` | the quantity is never created, so the histogram has no data |
+| probe material set to `none` | no `/score/probe/material` is written and the solver default applies |
+| a hand-entered voxel `half` that is too large | volume rendering memory grows as `(nbin+1)³` |
+| inconsistent histogram bins | curve comparison is skewed; the dialog warns in advance |
+| changing the quantity type but not the name | grouping follows the type, the name is display only |

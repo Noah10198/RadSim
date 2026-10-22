@@ -1,6 +1,18 @@
-# 09 · 数据格式参考
+# 09 · Data Formats
 
-> 所有文件格式均由本仓库代码实际读写，字段名以代码为准。
+> Every format listed here is actually read and written by the code in this repository; field
+> names follow the code.
+
+## Contents
+
+- [1. project.json](#1-projectjson)
+- [2. run.mac](#2-runmac)
+- [3. Result CSVs](#3-result-csvs)
+- [4. Particle source configuration](#4-particle-source-configuration-taskparticle)
+- [5. Physics configuration](#5-physics-configuration-taskphysics)
+- [6. Static resources](#6-static-resources)
+- [7. QSettings keys](#7-qsettings-keys)
+- [8. Directory conventions](#8-directory-conventions)
 
 ## 1. project.json
 
@@ -9,28 +21,28 @@
   "format": "radsim-project",
   "version": 1,
   "gdml_paths": ["geometry/model.gdml"],
-  "results_root": "D:/Project/Easy2Rad/RadSim/solver/runs",
+  "results_root": "solver/runs",
   "tasks": [
     {
       "name": "Run_001",
       "analysis_type": "default",
       "gdml_files": ["geometry/model.gdml"],
       "calculate": {"n_threads": 8, "n_events": 10000},
-      "particle": { "...": "见第 4 节" },
-      "physics": { "...": "见第 5 节" },
-      "analysis_config": { "...": "见 [05 文档](05-analysis.md)" }
+      "particle": { "...": "see section 4" },
+      "physics": { "...": "see section 5" },
+      "analysis_config": { "...": "see [doc 05](05-analysis.md)" }
     }
   ]
 }
 ```
 
-- `format` 兼容旧值 `3drad-project`；
-- `gdml_paths` 在项目文件夹内为**相对路径**；
-- 运行态字段（`status` / `progress` / `run_time` / `run_log`）不写入。
+- `format` also accepts the legacy value `3drad-project`;
+- `gdml_paths` are **relative paths** inside a project folder;
+- the runtime fields (`status` / `progress` / `run_time` / `run_log`) are not written.
 
 ## 2. run.mac
 
-分段结构见 [03 文档](03-mac-builder.md)。示例：
+The block structure is described in [doc 03](03-mac-builder.md). Example:
 
 ```
 /control/saveHistory
@@ -39,7 +51,7 @@
 /control/verbose 1
 /event/verbose 0
 /tracking/verbose 0
-/rad4space/gdml/SetGDMLFile D:/geo/model.gdml
+/rad4space/gdml/SetGDMLFile /abs/path/model.gdml
 /rad4space/physics/SetPL FTFP_BERT
 /rad4space/physics/SetGlobalCut 1.0 mm
 /run/initialize
@@ -59,9 +71,9 @@
 /score/dumpQuantityToFile Box dose out_Box_dose.csv
 ```
 
-## 3. 结果 CSV
+## 3. Result CSVs
 
-### 3.1 `out_<mesh>.csv`（realworld / probe）
+### 3.1 `out_<mesh>.csv` (realworld / probe)
 
 ```
 # mesh name: P1
@@ -70,20 +82,21 @@
 0,0,0,1.234e-05,3.2e-11,10000
 ```
 
-- 每个 `# primitive scorer name:` 起一个新块；
-- 数据行取第 4 列（value）、第 6 列（entry）；
-- 单位从 `total(value) [MeV]` 的方括号里回读，因此文件自描述。
+- every `# primitive scorer name:` line starts a new block;
+- a data row contributes column 4 (value) and column 6 (entry);
+- the unit is read back from the brackets in `total(value) [MeV]`, so the file describes itself.
 
-### 3.2 `out_Box_<q>.csv`（voxel）
+### 3.2 `out_Box_<q>.csv` (voxel)
 
 ```
 iX,iY,iZ,value[,val2,entry]
 ```
 
-- 文件里 **iZ 变化最快**；查看器按 `idx = ix + nx*(iy + ny*iz)` 重排；
-- 网格参数 `half` / `center` / `nbin` 从 `analysis_config["voxel"]` 取，不在文件里。
+- **iZ varies fastest** in the file; the viewer reorders with `idx = ix + nx*(iy + ny*iz)`;
+- the mesh parameters `half` / `center` / `nbin` come from `analysis_config["voxel"]`, not from the
+  file.
 
-### 3.3 `rad4space_h1_<mesh>_<q>.csv`（一维直方图）
+### 3.3 `rad4space_h1_<mesh>_<q>.csv` (1D histogram)
 
 ```
 #title ...
@@ -95,9 +108,10 @@ entries,Sw,Sw2,Sxw0,Sx2w0
 10000,...
 ```
 
-- 支持 `tools::histo::h1d` 文本 dump 与 legacy G4 的 `#axis fixed/log` 两种写法；
-- 计数取每行第一个逗号前的字段；
-- 轴类型由边界是否等差/等比推断；`rebin_log()` 用于修正「配置 log 但 dump 成 fixed」的构建。
+- both the `tools::histo::h1d` text dump and the legacy G4 `#axis fixed/log` style are supported;
+- the count is the field before the first comma on each row;
+- the axis type is inferred from whether the edges are arithmetic or geometric; `rebin_log()` fixes
+  builds that were configured for log but dumped as fixed.
 
 ### 3.4 `Traj.csv`
 
@@ -105,16 +119,16 @@ entries,Sw,Sw2,Sxw0,Sx2w0
 eventID,trackID,parentID,particle,step,x,y,z
 ```
 
-- 查看器按 `(eventID, trackID)` 分组，组内按 `step` 升序连线；
-- 多线程运行时只包含被选中 worker 的事件（见限制）。
+- the viewer groups by `(eventID, trackID)` and connects points by ascending `step`;
+- under multithreading it contains only the events of the selected worker (see the limitations).
 
 ### 3.5 `run.log`
 
-求解器 stdout + stderr 合并（`MergedChannels`），二进制追加写入。
-加载项目时用它判断任务是否成功：末尾不含 `error` / `fatal` / `abnormal` / `failed`
-即视为完成。
+The solver's merged stdout + stderr (`MergedChannels`), appended in binary. When a project is
+loaded it is used to decide whether a task succeeded: a tail without `error` / `fatal` /
+`abnormal` / `failed` counts as finished.
 
-## 4. 粒子源配置（`task.particle`）
+## 4. Particle source configuration (`task.particle`)
 
 ```python
 {
@@ -126,46 +140,47 @@ eventID,trackID,parentID,particle,step,x,y,z
   "pos_type": "Point" | "Beam" | ...,
   "ang_type": "iso" | "cos" | "cone" | ...,
   "spectrum": {...},
-  "macro_text": "...",              # mode == "file" 时原样写入
+  "macro_text": "...",              # written verbatim when mode == "file"
 }
 ```
 
-`mode == "file"` 时 `gps_source.macro_lines()` 直接返回 `macro_text`，不解析。
+When `mode == "file"`, `gps_source.macro_lines()` returns `macro_text` as it is, without parsing.
 
-## 5. 物理配置（`task.physics`）
+## 5. Physics configuration (`task.physics`)
 
 ```python
 {
   "physics_list": "FTFP_BERT",
   "add_hp": False, "add_rdm": False,
   "global_cut": 1.0,     # mm
-  "max_step": 0.0,       # mm，0 表示不写该命令
+  "max_step": 0.0,       # mm; 0 means the command is not written
 }
 ```
 
-生成的命令序列见 [03 文档第 4 节](03-mac-builder.md#4-物理与源复用对话框模块的宏生成器)。
+The resulting command sequence is in
+[doc 03, section 4](03-mac-builder.md#4-physics-and-source-reusing-the-dialog-macro-builders).
 
-## 6. 静态资源
+## 6. Static resources
 
-| 文件 | 内容 |
+| File | Contents |
 |---|---|
-| `data/element.xml` | 元素表：符号 → (Z, 原子量) |
-| `data/nist.txt` | NIST 材料列表（`G4_` 前缀）与密度 |
+| `data/element.xml` | element table: symbol → (Z, atomic weight) |
+| `data/nist.txt` | the NIST material list (the `G4_` prefix) with densities |
 
-## 7. QSettings 键
+## 7. QSettings keys
 
-| 键 | 默认/探测 |
+| Key | Default / probing |
 |---|---|
-| `solver/executable` | 依次探测 `solver/rad4space/build/Release/rad4space.exe`、`build/rad4space.exe`、`rad4space.exe` |
-| `solver/qt_bin_dir` | 求解器所需 Qt6 bin 目录；留空则用内置开发机路径 |
-| `solver/results_root` | 默认 `solver/runs` |
+| `solver/executable` | probed in turn: `solver/rad4space/build/Release/rad4space.exe`, `build/rad4space.exe`, `rad4space.exe` |
+| `solver/qt_bin_dir` | the Qt6 bin directory the solver needs; empty falls back to the built-in development-machine paths |
+| `solver/results_root` | default `solver/runs` |
 
-## 8. 目录约定
+## 8. Directory conventions
 
 ```
-solver/runs/<safe_task_name>/     # 草稿输出（所有项目共享）
-<项目>/geometry/                  # 几何副本
-<项目>/results/<safe_task_name>/  # 保存后的结果快照
+solver/runs/<safe_task_name>/     # draft output (shared by all projects)
+<project>/geometry/               # geometry copies
+<project>/results/<safe_task_name>/  # result snapshots after saving
 ```
 
-`safe_task_name()` 把非 `[A-Za-z0-9_.\-]` 字符替换为 `_`。
+`safe_task_name()` replaces every character outside `[A-Za-z0-9_.\-]` with `_`.

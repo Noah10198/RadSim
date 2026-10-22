@@ -187,7 +187,11 @@ class ParticleDialog(QDialog):
         self._gps_ready = False
         self._file_text = ""              # raw macro text held in file mode
         self._file_name = ""              # last imported file name (display)
-        self._user_data = []              # [[E(MeV), weight], ...]
+        # imported spectra, one point list per GPS energy type
+        # ({"User": [[E(MeV), weight], ...], "Arb": [...]}); both are written
+        # out verbatim, see gps_source.build_macro
+        self._spec = {"User": [], "Arb": []}
+        self._spec_pages = {}             # type -> {button/widget refs}
         self._defs = dict(_DEFS)
         self._acc = "#0078d4"             # accent (light)
         self._titles = []                 # (QLabel, no, name) refreshed on theme
@@ -574,6 +578,30 @@ class ParticleDialog(QDialog):
         er.addWidget(self._ene_cb)
         er.addStretch()
         v.addLayout(er)
+
+        # /gps/ene/emspec - only meaningful for an imported spectrum, where the
+        # numbers may be a momentum rather than an energy distribution.
+        self._qty_w = QWidget()
+        qr = QHBoxLayout(self._qty_w)
+        qr.setContentsMargins(0, 0, 0, 0)
+        qr.setSpacing(6)
+        ql = QLabel("Values:")
+        ql.setFixedWidth(_LABEL_W)
+        qr.addWidget(ql)
+        self._qty_cb = QComboBox()
+        self._qty_cb.addItem("Energy spectrum", True)
+        self._qty_cb.addItem("Momentum spectrum", False)
+        self._qty_cb.setFixedWidth(_CTRL_W)
+        self._qty_cb.setToolTip(
+            "What the imported weights describe, written as /gps/ene/emspec. "
+            "Energy (default) is emspec 1; choosing Momentum writes emspec 0 "
+            "and Geant4 converts the sampled momentum to energy.")
+        self._qty_cb.currentIndexChanged.connect(self._refresh_preview)
+        qr.addWidget(self._qty_cb)
+        qr.addStretch()
+        self._qty_w.setVisible(False)
+        v.addWidget(self._qty_w)
+
         self._ene_pages = {}
         self._ene_rows = {}      # type -> [(key, FieldRow), ...]
         for t, _lab in gps.ENERGY_TYPES:
@@ -582,18 +610,8 @@ class ParticleDialog(QDialog):
             pl.setContentsMargins(0, 0, 0, 0)
             pl.setSpacing(4)
             rows = []
-            if t == "User":
-                uh = QHBoxLayout()
-                btn = QPushButton("Load spectrum file\u2026")
-                btn.clicked.connect(self._import_user_spectrum)
-                self._user_btn = btn
-                info = QLabel("no spectrum loaded")
-                info.setStyleSheet("color:#8a8d9a;")
-                self._user_info = info
-                uh.addWidget(btn)
-                uh.addWidget(info)
-                uh.addStretch()
-                pl.addLayout(uh)
+            if t in ("User", "Arb"):
+                pl.addWidget(self._build_spectrum_page(t))
             else:
                 for key, label, unit in gps.ENERGY_FIELDS.get(t, []):
                     fr = self._num_row(key, label, unit)
@@ -723,12 +741,77 @@ class ParticleDialog(QDialog):
         page.setVisible(False)
         return page
 
+    def _build_spectrum_page(self, kind):
+        """Imported-spectrum sub-page, shared by User (histogram) and Arb
+        (point-wise).  Both keep their points in cfg["energy"]["data"]; Arb
+        adds the interpolation and differential/integral flags of the manual
+        (exgps test19-test22, test24).  The widgets are per type, so the two
+        pages never share state."""
+        pw = QWidget()
+        pl = QVBoxLayout(pw)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(4)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        btn_load = QPushButton("Load spectrum\u2026")
+        btn_load.setFixedWidth(_CTRL_W)
+        btn_load.setToolTip("Read a two-column (E [MeV], weight) text file and "
+                            "replace the current points. The points are used "
+                            "exactly as they appear in the file.")
+        # sits exactly under the value controls: same label indent, same width
+        row.addSpacing(_LABEL_W + 6)
+        row.addWidget(btn_load)
+        row.addStretch()
+        pl.addLayout(row)
+
+        refs = {"load": btn_load, "interp": None, "diff": None}
+        if kind == "Arb":
+            ir = QHBoxLayout()
+            ir.setSpacing(6)
+            il = QLabel("Interpolation:")
+            il.setFixedWidth(_LABEL_W)
+            ir.addWidget(il)
+            cb = QComboBox()
+            cb.addItems(gps.ARB_INTERP)
+            cb.setFixedWidth(_CTRL_W)
+            cb.setToolTip("Written as /gps/hist/inter; it decides how the "
+                          "points are joined when sampled.")
+            cb.currentIndexChanged.connect(self._refresh_preview)
+            ir.addWidget(cb)
+            ir.addStretch()
+            pl.addLayout(ir)
+
+            dr = QHBoxLayout()
+            dr.setSpacing(6)
+            dl = QLabel("Values are:")
+            dl.setFixedWidth(_LABEL_W)
+            dr.addWidget(dl)
+            dcb = QComboBox()
+            dcb.addItem("Differential", True)
+            dcb.addItem("Integral (cumulative)", False)
+            dcb.setFixedWidth(_CTRL_W)
+            dcb.setToolTip("Written as /gps/ene/diffspec: 1 for a differential "
+                           "spectrum (per MeV, the usual case), 0 when the "
+                           "weights are a cumulative integral.")
+            dcb.currentIndexChanged.connect(self._refresh_preview)
+            dr.addWidget(dcb)
+            dr.addStretch()
+            pl.addLayout(dr)
+            refs["interp"] = cb
+            refs["diff"] = dcb
+
+        btn_load.clicked.connect(lambda: self._import_spectrum(kind))
+        self._spec_pages[kind] = refs
+        return pw
+
     # ----------------------------------------------------- GPS handlers ----
 
     def _apply_ene_type(self, _ix=None):
         t = self._ene_cb.currentData() or "Lin"
         for k, pg in self._ene_pages.items():
             pg.setVisible(k == t)
+        self._qty_w.setVisible(t in ("User", "Arb"))
         self._refresh_preview()
 
     def _apply_pos_type(self, _ix=None):
@@ -794,12 +877,17 @@ class ParticleDialog(QDialog):
             self._ene_cb.blockSignals(True)
             self._ene_cb.setCurrentIndex(ix)
             self._ene_cb.blockSignals(False)
-        if t == "User":
-            self._user_data = [list(x) for x in (en.get("data") or [])]
+        if t in ("User", "Arb"):
+            self._spec[t] = [list(x) for x in (en.get("data") or [])]
+            self._set_spec_meta(t, en)
         else:
             for key, fr in self._ene_rows.get(t, []):
                 if key in en:
                     fr.set_value(en[key])
+        self._qty_cb.blockSignals(True)
+        self._qty_cb.setCurrentIndex(
+            0 if en.get("emspec", True) else 1)
+        self._qty_cb.blockSignals(False)
         self._apply_ene_type()
         # position
         ps = c.get("position", {}) or {}
@@ -863,7 +951,6 @@ class ParticleDialog(QDialog):
                 row.set_value((v.get("x", 0), v.get("y", 0), v.get("z", 0)))
             else:
                 row.set_value(dict(gps.ROT_AXES)[tag])
-        self._update_user_info()
 
     def _collect_gps(self):
         pb = self._p
@@ -874,8 +961,15 @@ class ParticleDialog(QDialog):
             p = {"kind": "standard", "name": pb["combo"].currentText()}
         t = self._ene_cb.currentData() or "Lin"
         en = {"type": t}
-        if t == "User":
-            en["data"] = [list(x) for x in self._user_data]
+        if t in ("User", "Arb"):
+            en["data"] = [list(x) for x in self._spec.get(t, [])]
+            if t == "Arb":
+                refs = self._spec_pages.get("Arb") or {}
+                en["interp"] = (refs["interp"].currentText()
+                                if refs.get("interp") else "Lin")
+                en["diffspec"] = bool(refs["diff"].currentData()) \
+                    if refs.get("diff") else True
+            en["emspec"] = bool(self._qty_cb.currentData())
         else:
             for key, fr in self._ene_rows.get(t, []):
                 en[key] = fr.value()
@@ -912,33 +1006,54 @@ class ParticleDialog(QDialog):
         return {"particle": p, "number": 1, "energy": en,
                 "position": ps, "angular": an}
 
-    # -------------------------------------------------------- user data ----
+    # ---------------------------------------------------- imported spectra ---
 
-    def _import_user_spectrum(self):
+    def _import_spectrum(self, kind="User"):
+        """Load a two-column spectrum and check it, without rewriting it.
+
+        The only ordering rule is that the energies must be ascending; when
+        they are not, the file is refused and the offending points are
+        reported.  Nothing is sorted, merged or re-binned - the points that
+        reach /gps/hist/point are exactly the ones in the file."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load spectrum", "", "Spectrum (*.txt *.dat *.csv);;All (*)")
+            self, f"Load {kind} spectrum", "",
+            "Spectrum (*.txt *.dat *.csv *.flx);;All (*)")
         if not path:
             return
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 text = f.read()
-        except OSError:
+        except OSError as exc:
+            QMessageBox.warning(self, "Cannot read file", str(exc))
             return
         pts = gps.parse_spectrum_text(text)
-        if not pts:
+        problems = gps.spectrum_problems(pts, kind)
+        if problems:
+            QMessageBox.warning(
+                self, "Invalid spectrum file",
+                f"{os.path.basename(path)}\n\n" + "\n".join(problems[:8]))
             return
-        self._user_data = [list(x) for x in pts]
-        self._update_user_info()
+        self._load_spectrum(kind, pts)
+
+    def _load_spectrum(self, kind, pts):
+        """Replace the points of one energy type; the macro rebuilds itself."""
+        self._spec[kind] = [list(p) for p in pts]
         self._refresh_preview()
 
-    def _update_user_info(self):
-        d = self._user_data
-        if not d:
-            self._user_info.setText("no spectrum loaded")
-            return
-        es = [x[0] for x in d]
-        self._user_info.setText(
-            f"{len(d)} points, E {es[0]:g}\u2013{es[-1]:g} MeV")
+    def _set_spec_meta(self, kind, en):
+        """Restore the Arb interpolation / differential flags of a saved task."""
+        refs = self._spec_pages.get(kind) or {}
+        cb = refs.get("interp")
+        if cb is not None:
+            ix = cb.findText(en.get("interp") or "Lin")
+            cb.blockSignals(True)
+            cb.setCurrentIndex(ix if ix >= 0 else 0)
+            cb.blockSignals(False)
+        dcb = refs.get("diff")
+        if dcb is not None:
+            dcb.blockSignals(True)
+            dcb.setCurrentIndex(0 if en.get("diffspec", True) else 1)
+            dcb.blockSignals(False)
 
     # ------------------------------------------------------ mode / state ---
 
@@ -1137,6 +1252,25 @@ class ParticleDialog(QDialog):
                     f"E max ({mx:g} MeV).\nE min must not exceed E max.")
         return None
 
+    def _check_spectrum(self, cfg):
+        """Return an error text when a User / Arb source has no usable point
+        list, else None.  The points are never modified here - an order
+        problem inherited from an older saved task is reported, not repaired."""
+        if self._mode != "gps":
+            return None
+        en = cfg.get("energy") or {}
+        t = en.get("type")
+        if t not in ("User", "Arb"):
+            return None
+        pts = en.get("data") or []
+        if not pts:
+            return (f"No spectrum loaded for the {t} energy type.\n"
+                    "Load a two-column (E [MeV], weight) file first.")
+        problems = gps.spectrum_problems(pts, t)
+        if problems:
+            return "\n".join(problems[:8])
+        return None
+
     def _focus_energy_row(self, keys):
         """Focus the first visible E min / E max row of the active spectrum."""
         t = self._ene_cb.currentData() if hasattr(self, "_ene_cb") else None
@@ -1157,6 +1291,10 @@ class ParticleDialog(QDialog):
         if err:
             QMessageBox.warning(self, "Invalid Energy Range", err)
             self._focus_energy_row(("e_min", "e_max"))
+            return
+        err = self._check_spectrum(cfg)
+        if err:
+            QMessageBox.warning(self, "Incomplete Spectrum", err)
             return
         if self._mode == "file" and not (cfg.get("raw") or "").strip():
             QMessageBox.warning(

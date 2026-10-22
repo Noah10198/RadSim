@@ -1,110 +1,123 @@
-# 10 · 环境与排错
+# 10 · Environment and Troubleshooting
 
-> 版本 0.1.0 ｜ 最后更新 2026-09-09
+## Contents
 
-## 1. 运行环境
+- [1. Runtime environment](#1-runtime-environment)
+- [2. Installation](#2-installation)
+- [3. Solver and Qt DLL conflict (most common issue)](#3-solver-and-qt-dll-conflict-most-common-issue)
+- [4. Symptom reference table](#4-symptom-reference-table)
+- [5. Logs and diagnostics](#5-logs-and-diagnostics)
+- [6. Known limitations (summary)](#6-known-limitations-summary)
+- [7. Performance notes](#7-performance-notes)
+- [8. Related documents](#8-related-documents)
 
-| 项 | 版本 |
+## 1. Runtime environment
+
+| Item | Version |
 |---|---|
-| Python | 3.10（开发验证 3.10.19） |
-| 操作系统 | Windows x64 |
+| Python | 3.10 (3.10.19 verified) |
+| OS | Windows x64 |
 | PyQt6 | 6.4.2 |
-| VTK | 9.3.1（导入名为 `vtkmodules`） |
+| VTK | 9.3.1 (imported as `vtkmodules`) |
 | numpy | 2.2.6 |
-| matplotlib | 3.10.7（可选，仅曲线图使用） |
-| 求解器 | rad4space，基于 Geant4 11.4.2 |
+| matplotlib | 3.10.7 (optional, only for curves) |
+| Solver | rad4space, built on Geant4 11.4.2 |
 
-## 2. 安装
+## 2. Installation
 
 ```bash
-# 推荐：完整环境快照
+# recommended: the provided environment file
 conda env create -f environment.yml
 conda activate pyoccenv
 python main.py
 
-# 或 pip
+# or with pip
 pip install -r requirements.txt
 python main.py
 ```
 
-求解器：仓库已含 `solver/rad4space/build/Release/rad4space.exe`；
-自行编译见 `solver/rad4space/README.zh.md`。
+Solver: the repository already contains `solver/rad4space/build/Release/rad4space.exe`; to build it
+yourself see `solver/rad4space/README.md`.
 
-## 3. 求解器与 Qt DLL 冲突（最常见问题）
+## 3. Solver and Qt DLL conflict (most common issue)
 
-**现象**：任务秒退，`run.log` 为空或只有一行，退出码 `0xC0000135`（找不到 DLL）
-或 `0xC0000139`（找不到入口点）。
+**Symptom**: the task exits immediately, `run.log` is empty or holds a single line, exit code
+`0xC0000135` (DLL not found) or `0xC0000139` (entry point not found).
 
-**原因**：rad4space 链接 Qt6。若 GUI 从 conda 环境启动，conda 自带的旧版 Qt6 DLL
-会因 `PATH` 顺序抢先加载。
+**Cause**: rad4space links against Qt6. When the GUI is started from a conda environment, conda's
+older Qt6 DLLs come first in `PATH` and are loaded instead.
 
-**处理**：
+**Fix**:
 
-1. 打开 **⚙️ Solver Setting**；
-2. 把求解器所用的 Qt6 `bin` 目录填进 `solver/qt_bin_dir`；
-3. 重新运行。
+1. open **⚙️ Solver Setting**;
+2. put the Qt6 `bin` directory the solver was built against into `solver/qt_bin_dir`;
+3. run again.
 
-RadSim 会在启动求解器前把该目录**前置**到子进程 `PATH`（`core/solver_config.runtime_dll_dirs`），
-不影响 GUI 自身的 Qt。
+Before starting the solver RadSim puts that directory at the **front** of the child process `PATH`
+(`core/solver_config.runtime_dll_dirs`), which does not affect the GUI's own Qt.
 
-## 4. 常见现象对照表
+## 4. Symptom reference table
 
-| 现象 | 原因 / 处理 |
+| Symptom | Cause / fix |
 |---|---|
-| 3D 视图全白/全黑 | 导入的是不支持渲染的实体；或 GL 上下文失效（切换主题/多屏后）。点 **⌂ Fit** 或重启 |
-| 日志刷 `wglMakeCurrent failed` | 次级 VTK 窗口与主窗口的 GL 上下文释放顺序问题。正常关闭主窗口会先关次级窗口；若仍出现，检查是否有窗口被强杀 |
-| 求解器路径显示未配置 | `solver/executable` 为空且自动探测失败，手动指定即可；未配置时程序以**模拟进度**运行 |
-| 进度条停在 99% | 真实进程仍在跑（进度是不确定型），属正常 |
-| 任务 `failed` | 先看 `run.log`；再看宏预览是否合理 |
-| 结果树没有新节点 | 只有 `completed` 的任务才重建结果子树；`failed` 只会挂 `run log` |
-| 结果文件存在但界面读不到 | 草稿目录与项目目录不是同一个；见 [06 文档第 5 节](06-project-io.md#5-草稿目录-vs-项目目录) |
-| 导入 GDML 卡住 | ≥500 KB 走后台线程并弹模态进度框；超大文件建议先精简几何 |
-| 几何尺寸明显不对 | GDML 表达式里引用了未定义标识符——求值器会静默替换为 `0`（见 [02 文档](02-gdml-pipeline.md)） |
-| 部分实体不显示 | `trap` / `trd` / `para` / `polyhedra` / `xtru` / 布尔运算等不支持渲染，导入时会弹提示 |
-| 探针曲线图报「matplotlib is not installed」 | 安装 matplotlib 后重开对话框 |
-| 直方图 x 轴不对齐 | 同一数量类型的 bins/range 不一致，对话框会提前警告 |
-| 保存很慢 | 保存是硬保存（全量镜像 `results/`） |
-| 想换项目文件夹 | 首次保存即固定，需重启后重新保存 |
+| the 3D view is all white or all black | the imported solid is not renderable, or the GL context was lost (after a theme switch or a monitor change). Click **⌂ Fit** or restart |
+| the log floods with `wglMakeCurrent failed` | the GL-context release order between the secondary VTK windows and the main window. A normal close shuts the secondary windows first; if it still happens, check whether a window was killed forcefully |
+| the solver path shows as not configured | `solver/executable` is empty and auto-detection failed; set it by hand. While unconfigured the program runs with **simulated progress** |
+| the progress bar sticks at 99 % | the real process is still running (progress is indeterminate); this is normal |
+| a task is `failed` | read `run.log` first, then check whether the macro preview looks sane |
+| the result tree gets no new node | only a `completed` task rebuilds its result subtree; a `failed` task only gets `run log` |
+| the result file exists but the UI cannot read it | the draft directory and the project directory are not the same; see [doc 06, section 5](06-project-io.md#5-draft-directory-vs-project-directory) |
+| importing a GDML file hangs | files ≥ 500 KB go to a background thread behind a modal progress dialog; for very large files simplify the geometry first |
+| the dimensions are clearly wrong | the GDML expression references an undefined identifier — the evaluator silently substitutes `0` (see [doc 02](02-gdml-pipeline.md)) |
+| some solids are not drawn | `trap` / `trd` / `para` / `polyhedra` / `xtru` / boolean solids are not rendered; a warning is shown at import time |
+| the probe chart reports "matplotlib is not installed" | install matplotlib and reopen the dialog |
+| the histogram x axes do not line up | the bins/range of one quantity type differ; the dialog warns about this in advance |
+| saving is slow | saving is a hard save (the whole `results/` directory is mirrored) |
+| wanting to move to another project folder | it is fixed by the first save; restart and save again |
 
-## 5. 日志与诊断
+## 5. Logs and diagnostics
 
-- 界面日志面板：`AsyncLogger` 写入，包含导入、配置、运行、异常；
-- 任务日志：`solver/runs/<task>/run.log`（或项目 `results/<task>/run.log`）；
-- 宏文件：同目录 `run.mac`，可直接在命令行手动执行以复现：
+- the on-screen log panel: written by `AsyncLogger`, covering import, configuration, runs and
+  exceptions;
+- the task log: `solver/runs/<task>/run.log` (or `<project>/results/<task>/run.log`);
+- the macro file: `run.mac` in the same directory, which can be executed by hand to reproduce:
 
 ```
 <qt_bin>; solver\rad4space\build\Release\rad4space.exe solver\runs\Run_001\run.mac
 ```
 
-## 6. 已知限制（汇总）
+## 6. Known limitations (summary)
 
-| 限制 | 说明 |
+| Limitation | Notes |
 |---|---|
-| 单几何 | 一个项目只支持一个 GDML |
-| 材料解析简化 | `<materials>` 只记录名称与密度 |
-| 未定义标识符 | 求值结果静默为 `0` |
-| 空心球 / cone | 空心球简化为外壳；cone 用 16 段近似，内半径不参与 |
-| 不渲染实体 | `trap`、`trd`、`para`、`hype`、`polyhedra`、`xtru`、`arb8`、`cutTube`、布尔运算等 |
-| 框选 / 右键菜单 | 3D 视图未实现框选与右键上下文菜单 |
-| 轨迹动画 | 轨迹查看器无播放/时间轴，只有筛选 |
-| 多线程轨迹 | `Traj.csv` 只含被选中 worker 的事件，需要完整轨迹时用 `/run/numberOfThreads 1` |
-| 进度语义 | 真实运行进度为不确定型，仅表示「进程还活着」 |
-| 单位 | GUI 与内部为 mm，宏内按求解器要求换算 cm |
+| single geometry | one project supports one GDML file |
+| simplified material parsing | `<materials>` records only the name and density |
+| undefined identifiers | evaluation silently yields `0` |
+| hollow sphere / cone | a hollow sphere is simplified to its outer shell; a cone uses 16 segments and ignores the inner radius |
+| solids not rendered | `trap`, `trd`, `para`, `hype`, `polyhedra`, `xtru`, `arb8`, `cutTube`, boolean solids, … |
+| rubber-band selection / context menu | neither is implemented in the 3D view |
+| trajectory animation | the trajectory viewer has filtering only, no playback or timeline |
+| multithreaded trajectories | `Traj.csv` holds only the events of the selected worker; use `/run/numberOfThreads 1` when the full trajectory is needed |
+| progress semantics | the progress of a real run is indeterminate and only means "the process is alive" |
+| units | mm in the GUI and internally, converted to cm inside the macro as the solver requires |
 
-## 7. 性能提示
+## 7. Performance notes
 
-- 球/柱/环的圆周分辨率固定 48，`cone` 固定 16 段——实体数量多时三角面会迅速膨胀；
-- 体素查看器内存约 `(nbin+1)³ × 8` 字节，`nbin` 三轴各 200 即约 65 MB；
-- 场景已关闭 MSAA 与 vsync，并缓存共享几何；如仍卡顿，优先减少可见实体。
+- spheres/cylinders/tori use a fixed 48-segment circumference and cones a fixed 16 segments, so the
+  triangle count grows quickly with the number of solids;
+- the voxel viewer needs about `(nbin+1)³ × 8` bytes, i.e. roughly 65 MB at `nbin = 200` on each
+  axis;
+- MSAA and vsync are already off and shared geometry is cached; if it still stutters, reduce the
+  number of visible solids first.
 
-## 8. 相关文档
+## 8. Related documents
 
-- [架构总览](01-architecture.md)
-- [GDML 处理链路](02-gdml-pipeline.md)
-- [run.mac 生成](03-mac-builder.md)
-- [运行调度](04-execution.md)
-- [分析与结果](05-analysis.md)
-- [项目保存与加载](06-project-io.md)
-- [可视化](07-visualization.md)
-- [界面参考](08-ui-reference.md)
-- [数据格式](09-data-formats.md)
+- [Architecture](01-architecture.md)
+- [GDML pipeline](02-gdml-pipeline.md)
+- [run.mac generation](03-mac-builder.md)
+- [Run execution](04-execution.md)
+- [Analysis and results](05-analysis.md)
+- [Project save and load](06-project-io.md)
+- [Visualization](07-visualization.md)
+- [UI reference](08-ui-reference.md)
+- [Data formats](09-data-formats.md)

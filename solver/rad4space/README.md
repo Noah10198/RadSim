@@ -41,7 +41,7 @@ rad4space/
 ## Build
 
 ```bat
-cmake -S rad4space -B rad4space/build -DGeant4_DIR=D:/Application/Geant4/geant4-v11.4.2/target/lib/cmake/Geant4
+cmake -S rad4space -B rad4space/build -DGeant4_DIR=<path-to-Geant4>/lib/cmake/Geant4
 cmake --build rad4space/build --config Release --parallel 8
 ```
 
@@ -61,11 +61,11 @@ rad4space.exe                  :: interactive: vis.mac is executed automatically
 ### Known environment pitfall (important)
 
 If running from a terminal with a conda environment activated fails with `0xC0000139`,
-conda's older Qt6 (e.g. `pyoccenv\Library\bin`) is being loaded before the Qt6.11 that
-Geant4 was built against. Put Qt6.11 first on PATH and run again:
+an older Qt6 (e.g. the one shipped in the conda environment's `Library\bin`) is being loaded
+before the Qt6 that Geant4 was built against. Put the correct Qt6 `bin` first on PATH:
 
 ```bat
-set PATH=D:\Application\Qt6.11\6.11.1\msvc2022_64\bin;%PATH%
+set PATH=<path-to-Qt6>\bin;%PATH%
 cd rad4space\build\Release
 rad4space.exe run.mac
 ```

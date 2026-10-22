@@ -1,129 +1,155 @@
-# 06 · 项目保存与加载
+# 06 · Project Save and Load
 
-> 源码：`core/project_io.py`、`app/main_window.py`（`_save_project` / `_load_project`）
+> Source: `core/project_io.py`, `app/main_window.py` (`_save_project` / `_load_project`)
 
-## 1. 一个项目 = 一个文件夹
+## Contents
 
-RadSim 没有数据库，也没有单独的配置文件概念。**项目就是一个可整体拷贝的文件夹**：
+- [1. A project is a folder](#1-a-project-is-a-folder)
+- [2. project.json structure](#2-projectjson-structure)
+- [3. Save flow](#3-save-flow)
+- [4. Load flow](#4-load-flow)
+- [5. Draft directory vs project directory](#5-draft-directory-vs-project-directory)
+- [6. The task name is the primary key](#6-the-task-name-is-the-primary-key)
+- [7. Troubleshooting](#7-troubleshooting)
+
+## 1. A project is a folder
+
+RadSim has no database and no separate configuration-file concept. **A project is a folder you can
+copy as a whole**:
 
 ```
 MyProject/
-├── project.json           配置清单（几何引用 + 任务列表）
+├── project.json           manifest (geometry references + task list)
 ├── geometry/
-│   └── <导入的>.gdml       几何文件副本
+│   └── <imported>.gdml    a copy of the geometry file
 └── results/
-    └── <safe_task_name>/   每个任务运行输出的快照
+    └── <safe_task_name>/  a snapshot of each task's run output
         ├── run.mac
         ├── run.log
         ├── out_*.csv
         └── rad4space_h1_*.csv
 ```
 
-只要把这个文件夹拷到另一台机器，再装好 RadSim 与求解器，就能原样复现。
+Copy the folder to another machine, install RadSim and the solver, and you can reproduce it as it
+was.
 
-## 2. project.json 结构
+## 2. project.json structure
 
-| 字段 | 说明 |
+| Field | Meaning |
 |---|---|
-| `format` | `"radsim-project"`；兼容旧值 `"3drad-project"` |
-| `version` | 当前 `1` |
-| `gdml_paths` | 几何文件路径列表。复制到 `geometry/` 后**存相对路径**，保证可迁移 |
-| `results_root` | 保存时的草稿结果根目录（用于回放定位） |
-| `tasks` | 任务数组 |
+| `format` | `"radsim-project"`; the legacy value `"3drad-project"` is still accepted |
+| `version` | currently `1` |
+| `gdml_paths` | the geometry file list. After copying into `geometry/` these are **relative paths**, which is what keeps the project portable |
+| `results_root` | the draft results root at save time (used to locate the output on replay) |
+| `tasks` | the task array |
 
-每个任务对象包含：
+Each task object contains:
 
-| 字段 | 说明 |
+| Field | Meaning |
 |---|---|
-| `name` | 任务名（唯一，同时是 `RunManager` 的键） |
-| `analysis_type` | `default` 等 |
-| `gdml_files` | 该任务引用的几何 |
+| `name` | task name (unique, and the key used by `RunManager`) |
+| `analysis_type` | `default` and friends |
+| `gdml_files` | the geometry this task references |
 | `calculate` | `{n_threads, n_events}` |
-| `particle` | 粒子源配置（见 05 文档） |
-| `physics` | 物理配置（见 05 文档） |
-| `analysis_config` | 三种分析模式的配置（见 05 文档） |
+| `particle` | particle source configuration (see doc 05) |
+| `physics` | physics configuration (see doc 05) |
+| `analysis_config` | the configuration of the three analysis modes (see doc 05) |
 
-> 运行态字段（`status`、`progress`、`run_time`、`run_log`）**不写入** `project.json`；
-> 它们由加载时扫描磁盘上的结果文件重建。
+> Runtime fields (`status`, `progress`, `run_time`, `run_log`) are **not written** to
+> `project.json`; they are rebuilt on load by scanning the result files on disk.
 
-## 3. 保存流程
+## 3. Save flow
 
-入口只有一个：`MainWindow._save_project()`。
+There is exactly one entry point: `MainWindow._save_project()`.
 
-1. **确定项目目录**
-   - `self._project_dir is None` → `QFileDialog.getExistingDirectory` 让用户选；
-   - 若所选目录里已存在 `project_file(folder)`，询问是否覆盖；
-   - 一旦确定，**后续保存不再询问**（想换目录需重启，或删掉当前项目重新保存）。
-2. **收集数据**：遍历 `RunManager._tasks`，把每个 `RunTask` 序列化成上表的字段，
-   连同 `gdml_paths` 与 `get_results_root()` 一起交给 `core.project_io.save_project()`。
-3. **落盘**（`save_project()` 内）：
-   - 写 `project.json`；
-   - 把几何文件**复制**到 `<项目>/geometry/`，并把 `gdml_paths` 改写为相对路径；
-   - 把草稿结果目录 `solver/runs/<task>/` **镜像**到 `<项目>/results/<task>/`。
-4. **异常**：任何失败都 `try/except` → `QMessageBox.warning` + 日志，不中断程序。
+1. **Determine the project directory**
+   - `self._project_dir is None` → `QFileDialog.getExistingDirectory` asks the user;
+   - if the chosen directory already contains `project_file(folder)`, ask whether to overwrite;
+   - once decided, **later saves do not ask again** (changing folder means restarting or deleting
+     the current project and saving again).
+2. **Collect the data**: walk `RunManager._tasks`, serialize each `RunTask` into the fields above,
+   and hand them together with `gdml_paths` and `get_results_root()` to
+   `core.project_io.save_project()`.
+3. **Write to disk** (inside `save_project()`):
+   - write `project.json`;
+   - **copy** the geometry files into `<project>/geometry/` and rewrite `gdml_paths` as relative
+     paths;
+   - **mirror** the draft results directory `solver/runs/<task>/` into
+     `<project>/results/<task>/`.
+4. **Exceptions**: every failure is `try/except`ed → `QMessageBox.warning` + log, without aborting
+   the program.
 
-### 为什么是「硬保存」
+### Why it is a "hard save"
 
-保存是**全量镜像**，不是增量补丁：
+Saving is a **full mirror**, not an incremental patch:
 
-- `geometry/` 与 `results/` 按当前状态重写，删除的任务会连同其已保存结果一起消失；
-- 好处是项目文件夹永远自洽，不会残留「幽灵结果」；
-- 代价是保存耗时与结果体积成正比——大型结果集保存会比较慢。
+- `geometry/` and `results/` are rewritten from the current state, so a deleted task disappears
+  together with its saved results;
+- the benefit is that a project folder is always self-consistent and never keeps "ghost results"
+  around;
+- the cost is that saving takes time proportional to the size of the results — a large result set
+  saves slowly.
 
-## 4. 加载流程
+## 4. Load flow
 
-入口：`MainWindow._load_project()`。顺序如下：
+Entry point: `MainWindow._load_project()`, in this order:
 
-1. **前置检查**：若 `RunManager.is_running_any()` 或有任务在跑，直接拒绝并提示。
-2. **选文件**：`QFileDialog.getOpenFileName` 选 `project.json`。
-3. **清理草稿输出**（关键）：草稿结果根 `solver/runs` 是**所有项目共享**的。
-   加载前对当前每个任务名调用 `clear_task_output(results_root, name)`，
-   否则旧项目里同名任务的残留 CSV 会被新项目当成自己的结果。
-4. **清空运行时**：`_close_task_dialogs()` → `_run_manager.clear()` →
-   `_project_tree.clear_tasks()` → `_task_counter = 0`。
-5. **恢复几何**：对 `gdml_paths[0]` 调用 `_replace_gdml()`（内部走与导入相同的
-   解析 + 建树 + 建场景路径）。
-6. **重建任务**：逐个 `RunTask` 回填字段，重新挂到项目树上，并设置各配置项的
-   「已配置」标记。
-7. **恢复结果**：`_restore_task_outputs(task)` 扫描该任务的结果目录——
-   - 存在 `out_*.csv`，或 `run.log` 末尾不含 `error` / `fatal` / `abnormal` / `failed`，
-     则判定为已完成，状态置 `completed`；
-   - 随后 `_refresh_task_results()` 按磁盘文件与 `analysis_config` 重建 Results 子树。
-8. **收尾**：`_ensure_default_task()`（没有任务时补一个）→ `_sync_mac_preview_tasks()`。
+1. **Pre-check**: if `RunManager.is_running_any()` or any task is running, refuse and tell the
+   user.
+2. **Choose a file**: `QFileDialog.getOpenFileName` on `project.json`.
+3. **Clean the draft output** (critical): the draft results root `solver/runs` is **shared by all
+   projects**. Before loading, call `clear_task_output(results_root, name)` for every current task
+   name, otherwise leftover CSVs from a same-named task of the previous project are read as this
+   project's results.
+4. **Drop the runtime state**: `_close_task_dialogs()` → `_run_manager.clear()` →
+   `_project_tree.clear_tasks()` → `_task_counter = 0`.
+5. **Restore the geometry**: call `_replace_gdml()` on `gdml_paths[0]` (which internally goes
+   through the same parse + tree + scene path as an import).
+6. **Rebuild the tasks**: refill each `RunTask`, re-attach it to the project tree and set the
+   "configured" flags of the individual settings.
+7. **Restore the results**: `_restore_task_outputs(task)` scans the task's result directory —
+   - if `out_*.csv` exists, or the tail of `run.log` contains none of `error` / `fatal` /
+     `abnormal` / `failed`, the task counts as finished and its status becomes `completed`;
+   - `_refresh_task_results()` then rebuilds the Results subtree from the files on disk and the
+     `analysis_config`.
+8. **Wrap up**: `_ensure_default_task()` (add one when there is none) → `_sync_mac_preview_tasks()`.
 
-## 5. 草稿目录 vs 项目目录
+## 5. Draft directory vs project directory
 
-这是最容易混淆的一点：
+This is the easiest thing to confuse:
 
-| 目录 | 角色 | 谁写 | 何时清 |
+| Directory | Role | Written by | Cleared when |
 |---|---|---|---|
-| `solver/runs/<task>/` | **草稿输出**，所有项目共享 | `RunManager` / `mac_builder.write_workdir` | 每次运行前清空；加载项目时按任务名清理；删除任务时清理 |
-| `<项目>/results/<task>/` | **项目快照**，随项目走 | `project_io.save_project` | 保存时按当前任务列表重写 |
+| `solver/runs/<task>/` | **draft output**, shared by all projects | `RunManager` / `mac_builder.write_workdir` | before every run; on project load, per task name; on task deletion |
+| `<project>/results/<task>/` | **project snapshot**, travels with the project | `project_io.save_project` | rewritten from the current task list on every save |
 
-结果查看器读取时，`MainWindow._result_work_dir(task)` 的优先级是：
+When a result viewer reads, the priority in `MainWindow._result_work_dir(task)` is:
 
 ```
-task.run_log 所在目录  →  get_results_root()/<task>  →  <项目>/results/<task>
+the directory of task.run_log  →  get_results_root()/<task>  →  <project>/results/<task>
 ```
 
-所以「刚跑完但还没保存」看的是草稿目录，「保存后重新打开项目」看的是项目目录。
+So "just ran but not saved yet" reads the draft directory, while "reopened after saving" reads the
+project directory.
 
-## 6. 任务名即主键
+## 6. The task name is the primary key
 
-`RunManager._tasks` 是 `name → RunTask` 的字典，项目树节点也用任务名索引，
-结果目录名还是任务名的净化版本。因此：
+`RunManager._tasks` is a `name → RunTask` dictionary, project-tree nodes are indexed by task name
+as well, and the result directory name is the sanitized version of that name. Therefore:
 
-- **任务名必须唯一**：重名会互相覆盖结果；
-- 重命名任务（`_rename_task`）要同时改字典键、树节点、宏预览与监视器；
-- 目录名走 `safe_task_name()`，非法字符替换为 `_`——重命名成不同但净化后相同的名字
-  （如 `a/b` 与 `a_b`）会共用同一个目录，属于已知边界情况。
+- **task names must be unique**: duplicates overwrite each other's results;
+- renaming a task (`_rename_task`) has to update the dictionary key, the tree node, the macro
+  preview and the monitors together;
+- directory names go through `safe_task_name()`, which replaces illegal characters with `_` — so
+  renaming to two different names that sanitize to the same string (`a/b` and `a_b`) shares one
+  directory, a known edge case.
 
-## 7. 排错
+## 7. Troubleshooting
 
-| 现象 | 原因 |
+| Symptom | Cause |
 |---|---|
-| 打开项目后结果树里出现别的项目的文件 | 草稿目录未清理（正常流程会清，手工拷贝结果目录时可能触发） |
-| 保存很慢 | 硬保存全量镜像结果目录 |
-| 换了电脑打不开 | `geometry/` 缺失，或 `project.json` 里的相对路径被手工改过 |
-| 保存后旧任务结果还在 | 任务被删除了但项目目录里残留 —— 硬保存会重写 `results/`，若仍存在请检查是否保存成功 |
-| 想换项目文件夹 | 当前设计为「一次保存即固定」，需重启或删除 `project.json` 后重新保存 |
+| another project's files appear in the result tree | the draft directory was not cleaned (the normal flow does clean it; copying a result directory by hand can trigger this) |
+| saving is slow | a hard save mirrors the whole result directory |
+| the project will not open on another machine | `geometry/` is missing, or the relative paths in `project.json` were edited by hand |
+| results of a deleted task survive | the task was removed but the files stayed in the project folder — a hard save rewrites `results/`, so check whether the save actually succeeded |
+| wanting to move to a different project folder | by design the folder is fixed by the first save; restart, or delete `project.json` and save again |

@@ -2,7 +2,7 @@
 
 **Radiation simulation front-end** — configure Geant4 sources and physics, run Monte Carlo batches, and inspect dose, flux, spectra and trajectories.
 
-> **Version 0.1.0** ｜ Last updated 2026-09-30 ｜ Chinese version: [README.zh.md](README.zh.md)
+> **Version 0.1.0** ｜ Chinese version: [README.zh.md](README.zh.md)
 
 ## Overview
 

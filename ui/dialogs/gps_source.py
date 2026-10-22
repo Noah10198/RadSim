@@ -7,8 +7,6 @@ rad4space solver examples (R4PrimaryGeneratorAction uses a standard GPS).
 """
 # Usage: cfg = DEFAULT_CONFIG(); lines = build_macro(cfg)
 
-import math
-
 PARTICLES = ["gamma", "e-", "e+", "proton", "neutron", "alpha",
              "deuteron", "triton", "He3", "mu-", "mu+", "pi-", "pi+",
              "anti_proton"]
@@ -16,7 +14,16 @@ PARTICLES = ["gamma", "e-", "e+", "proton", "neutron", "alpha",
 ENERGY_TYPES = [("Mono", "Mono"), ("Lin", "Linear (Lin)"),
                 ("Gauss", "Gaussian (Gauss)"), ("Pow", "Power-law (Pow)"),
                 ("Exp", "Exponential (Exp)"),
-                ("User", "User spectrum (import)")]
+                ("Arb", "Arbitrary point-wise (Arb)"),
+                ("User", "User histogram (import)")]
+
+# /gps/hist/inter for the Arb type (manual 2.7.3, exgps test19-test22).
+ARB_INTERP = ["Lin", "Log", "Exp", "Spline"]
+
+# G4SPSEneDistribution interpolates the Arb points in fixed 1024-element
+# arrays, so a longer spectrum must be rejected at import rather than
+# silently truncated (the points are written out verbatim).
+MAX_SPEC_POINTS = 1024
 
 POS_TYPES = [("Point", "Point"), ("Plane", "Plane"),
              ("Surface", "Surface")]
@@ -49,7 +56,11 @@ ENERGY_FIELDS = {
             ("alpha", "Spectral index α", "")],
     "Exp": [("e_min", "E min", "MeV"), ("e_max", "E max", "MeV"),
             ("ezero", "Scale E0", "MeV")],
-    "User": [],    # data lives in cfg.energy.data = [[E(MeV), weight], ...]
+    # Both imported spectra live in cfg.energy.data = [[E(MeV), weight], ...]:
+    # User is expanded to /gps/hist/type energy (a histogram), Arb to
+    # /gps/hist/type arb plus /gps/hist/inter (point-wise, interpolated).
+    "Arb": [],
+    "User": [],
 }
 SHAPE_FIELDS = {
     "Circle": [("radius", "Radius", "mm")],
@@ -246,14 +257,25 @@ def build_macro(cfg) -> list:
             if key in en:
                 pre, suf = _CMD[key]
                 out.append(f"{pre} {_f(en[key])}" + (f" {suf}" if suf else ""))
-    if etype == "User":
-        d = en.get("data") or []
-        if d:
-            es = [x[0] for x in d]
-            out.append(
-                f"# user spectrum, {len(d)} points "
-                f"(E {_f(min(es))}-{_f(max(es))} MeV); the /gps/histogram "
-                "lines are appended at run stage once the solver is checked")
+    # Imported spectra are expanded here, following the exgps command order:
+    # ene/type -> diffspec / emspec -> hist/type -> hist/point -> hist/inter.
+    # The points are written exactly as imported (no sorting or re-binning);
+    # the import dialog rejects non-ascending data instead.
+    if etype in ("User", "Arb"):
+        if not en.get("emspec", True):
+            # values are a momentum spectrum, Geant4 converts them to energy
+            out.append("/gps/ene/emspec 0")
+        if etype == "Arb":
+            diff = 1 if en.get("diffspec", True) else 0
+            out.append(f"/gps/ene/diffspec {diff}")
+        # one comment line so the unit rule is visible in the saved macro
+        out.append("# E in MeV: bin upper edge (histogram) or abscissa "
+                   "(point-wise); Geant4 default units.")
+        out.append("/gps/hist/type " + ("arb" if etype == "Arb" else "energy"))
+        for pt in (en.get("data") or []):
+            out.append(f"/gps/hist/point {_f(pt[0])} {_f(pt[1])}")
+        if etype == "Arb":
+            out.append(f"/gps/hist/inter {en.get('interp') or 'Lin'}")
 
     # 3. Source position
     ps = cfg.get("position", {})
@@ -332,12 +354,19 @@ def energy_summary(cfg) -> str:
         if mn is not None and mx is not None:
             s += f", {_f(mn)}–{_f(mx)} MeV"
         return s
-    if t == "User":
+    if t in ("User", "Arb"):
         d = en.get("data") or []
         if not d:
-            return "User (not loaded)"
+            return f"{t} (not loaded)"
         es = [x[0] for x in d]
-        return f"User {len(d)}pt {_f(min(es))}-{_f(max(es))} MeV"
+        s = f"{t} {len(d)}pt {_f(min(es))}-{_f(max(es))} MeV"
+        if t == "Arb":
+            s += f" ·{en.get('interp') or 'Lin'}"
+            if not en.get("diffspec", True):
+                s += " ·integral"
+        if not en.get("emspec", True):
+            s += " ·momentum"
+        return s
     return t
 
 
@@ -373,15 +402,17 @@ def angular_summary(cfg) -> str:
     return t
 
 
-# ---------- User spectrum data ----------
+# ---------- Imported spectrum data ----------
 
-def parse_spectrum_text(text: str, max_points: int = 512):
-    """Parse a user spectrum text into [[E(MeV), weight], ...] sorted by E
-    with duplicate energies merged.
+def parse_spectrum_text(text: str):
+    """Parse a spectrum text into [[E(MeV), weight], ...] in **file order**.
 
     One pair per line: E(MeV) weight; text after '#' is a comment; spaces,
-    tabs and commas are all accepted separators. When the data is larger than
-    max_points it is re-binned on an even E grid.
+    tabs and commas are all accepted separators.  Lines without two numbers
+    are skipped.  Nothing else is done here: the points are neither sorted,
+    merged, de-duplicated nor re-binned, because a silent re-write of the
+    user's data would make the resulting spectrum untraceable.  Order is
+    verified separately by spectrum_problems().
     """
     pts = []
     for raw in text.splitlines():
@@ -396,48 +427,39 @@ def parse_spectrum_text(text: str, max_points: int = 512):
             w = float(parts[1])
         except ValueError:
             continue
-        if e > 0 and w >= 0:
-            pts.append([e, w])
-    if not pts:
-        return []
-    pts.sort(key=lambda z: z[0])
-    out = []
-    for e, w in pts:
-        if out and abs(out[-1][0] - e) < 1e-9 * max(1.0, abs(e)):
-            out[-1][1] += w
-        else:
-            out.append([e, w])
-    if len(out) <= max_points:
-        return out
-    return _rebin(out, max_points)
-
-
-def _rebin(pts, n: int):
-    """Split monotone (E, w) points into n equal E-bins; each bin keeps its
-    mid E and the summed weight."""
-    lo, hi = pts[0][0], pts[-1][0]
-    if hi <= lo:
-        return pts[:n]
-    buckets = [[] for _ in range(n)]
-    for e, w in pts:
-        i = min(n - 1, int((e - lo) / (hi - lo) * n))
-        buckets[i].append((e, w))
-    res = []
-    for i, b in enumerate(buckets):
-        if not b:
-            continue
-        e0 = lo + (hi - lo) * (i + 0.5) / n
-        res.append([round(e0, 6), round(sum(w for _e, w in b), 6)])
-    return res or pts[:1]
-
-
-def example_user_spectrum():
-    """Example user spectrum: exponential background + a characteristic peak
-    (only used to demo import/plotting)."""
-    pts = []
-    for i in range(64):
-        e = 0.05 + (i + 0.5) * 0.18      # 0.05 ~ 11.6 MeV
-        peak = 2.4 * math.exp(-((e - 1.2) / 0.09) ** 2)
-        bg = 1.1 * math.exp(-e / 2.6)
-        pts.append([round(e, 4), round(bg + peak, 4)])
+        pts.append([e, w])
     return pts
+
+
+def spectrum_problems(pts, kind: str = "User"):
+    """Check an imported point list without touching it.
+
+    Returns a list of human-readable problems; empty means the spectrum can be
+    written out as-is.  The only ordering rule enforced here is that the
+    energies must be strictly ascending, which is what /gps/hist/point expects
+    (Geant4 builds a histogram from the point sequence and produces a silently
+    wrong or empty distribution otherwise).
+    """
+    if len(pts) < 2:
+        return [f"The file must contain at least two (E, weight) points; "
+                f"found {len(pts)}."]
+    out = []
+    for i in range(1, len(pts)):
+        e_prev, e_cur = pts[i - 1][0], pts[i][0]
+        if e_cur < e_prev:
+            out.append(f"Point {i + 1}: E = {e_cur:g} MeV is lower than the "
+                       f"previous E = {e_prev:g} MeV.")
+        elif e_cur == e_prev:
+            out.append(f"Point {i + 1}: E = {e_cur:g} MeV repeats the "
+                       "previous energy.")
+        if len(out) >= 6:
+            out.append("...")
+            break
+    if out:
+        out.insert(0, "The first column must be in strictly ascending order. "
+                      "The file was not loaded and no data was reordered.")
+    if kind == "Arb" and len(pts) > MAX_SPEC_POINTS:
+        out.append(f"Arb accepts at most {MAX_SPEC_POINTS} points "
+                   f"(found {len(pts)}); Geant4 interpolates them in "
+                   "fixed-size arrays.")
+    return out
