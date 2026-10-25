@@ -107,15 +107,43 @@ def _num(v):
     return ("%g" % v) if isinstance(v, float) else str(v)
 
 
+def _filter_line(q, idx):
+    """/score/filter line for one quantity, or None when it has no filter.
+
+    Geant4 binds a filter to the *current* primitive scorer (G4VScoringMesh::
+    SetFilter -> fCurrentPS), which is the scorer registered by the last
+    /score/quantity line, so this line has to follow its own quantity line.
+    Only one filter per scorer: setting another one overwrites the first, so
+    the quantity/filter pairs are emitted interleaved, never grouped.
+
+    The filter name is only used in log and overwrite messages, hence the
+    sequence number: quantity names are free text and may not survive
+    command parsing.
+    """
+    f = q.get("filter") or {}
+    t = f.get("t")
+    if t == "particle" and f.get("p"):
+        return f"/score/filter/particle f{idx} {f['p']}"
+    if t in ("charged", "neutral"):
+        return f"/score/filter/{t} f{idx}"
+    return None
+
+
 def _quantity_lines(qs):
-    """/score/quantity lines for a mesh."""
+    """/score/quantity lines for a mesh, each followed by its own filter.
+
+    Order matters: a filter applies to the most recently defined quantity
+    (see _filter_line), so quantity/filter must stay interleaved."""
     out = []
-    for q in qs or []:
+    for idx, q in enumerate(qs or [], 1):
         name = q.get("name", "q")
         typ = q.get("type", "energyDeposit")
         unit = _QUANTITY_UNIT.get(typ)
         out.append(f"/score/quantity/{typ} {name}"
                    + (f" {unit}" if unit else ""))
+        flt = _filter_line(q, idx)
+        if flt:
+            out.append(flt)
     return out
 
 
