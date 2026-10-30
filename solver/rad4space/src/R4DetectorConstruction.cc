@@ -20,8 +20,8 @@ R4DetectorConstruction::R4DetectorConstruction()
   // Strip GDML comments to avoid parsing errors;Preserve the full name from the file (with the hex suffix).
   //for example, dummy0x55d123905820
   parser->SetStripFlag(false); 
-
-
+  parser->SetOverlapCheck(true);
+  
   messenger = new G4GenericMessenger(this, "/rad4space/gdml/",
                                      "rad4space geometry commands");
 
